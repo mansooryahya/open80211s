@@ -698,6 +698,8 @@ static void mac80211_hwsim_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	bool ack;
 	struct ieee80211_tx_info *txi;
 	u32 _pid;
+	u8 tx_count[IEEE80211_TX_MAX_RATES];
+	int i;
 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *) skb->data;
 	struct mac80211_hwsim_data *data = hw->priv;
 
@@ -734,9 +736,22 @@ static void mac80211_hwsim_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (txi->control.sta)
 		hwsim_check_sta_magic(txi->control.sta);
 
+	if (!ack)
+		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++)
+			tx_count[i] = txi->control.rates[i].count;
+
 	ieee80211_tx_info_clear_status(txi);
 	if (!(txi->flags & IEEE80211_TX_CTL_NO_ACK) && ack)
 		txi->flags |= IEEE80211_TX_STAT_ACK;
+
+	if (ack) {
+		txi->status.rates[0].count = 1;
+		txi->status.rates[1].idx = -1;
+	} else {
+		for (i = 0; i < IEEE80211_TX_MAX_RATES; i++)
+			txi->control.rates[i].count = tx_count[i];
+	}
+
 	ieee80211_tx_status_irqsafe(hw, skb);
 }
 
