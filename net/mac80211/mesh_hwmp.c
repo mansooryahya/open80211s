@@ -307,7 +307,9 @@ void ieee80211s_update_metric(struct ieee80211_local *local,
 {
 	struct ieee80211_tx_info *txinfo = IEEE80211_SKB_CB(skb);
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *) skb->data;
+	struct rate_info rinfo;
 	int failed;
+	int rate;
 
 	if (!ieee80211_is_data(hdr->frame_control))
 		return;
@@ -318,36 +320,40 @@ void ieee80211s_update_metric(struct ieee80211_local *local,
 	stainfo->fail_avg = ((80 * stainfo->fail_avg + 5) / 100 + 20 * failed);
 	if (stainfo->fail_avg > 95)
 		mesh_plink_broken(stainfo);
+
+	sta_set_rate_info_tx(stainfo, &stainfo->last_tx_rate, &rinfo);
+	rate = cfg80211_calculate_bitrate(&rinfo);
+	if (WARN_ON(!rate))
+		return;
+
+	ewma_add(&stainfo->avg_rate, rate);
+	return;
 }
 
 static u32 airtime_link_metric_get(struct ieee80211_local *local,
 				   struct sta_info *sta)
 {
-	struct rate_info rinfo;
 	/* This should be adjusted for each device */
 	int device_constant = 1 << ARITH_SHIFT;
 	int test_frame_len = TEST_FRAME_LEN << ARITH_SHIFT;
 	int s_unit = 1 << ARITH_SHIFT;
-	int rate, err;
 	u32 tx_time, estimated_retx;
 	u64 result;
+	int rate;
+	int err = (sta->fail_avg << ARITH_SHIFT) / 100;
 
 	if (sta->fail_avg >= 100)
 		return MAX_METRIC;
 
-	sta_set_rate_info_tx(sta, &sta->last_tx_rate, &rinfo);
-	rate = cfg80211_calculate_bitrate(&rinfo);
-	if (WARN_ON(!rate))
-		return MAX_METRIC;
-
-	err = (sta->fail_avg << ARITH_SHIFT) / 100;
+	/* If not enough values accumulated in rate average, assume 1 Mbps */
+	rate = max(ewma_read(&sta->avg_rate), 10UL);
 
 	/* bitrate is in units of 100 Kbps, while we need rate in units of
 	 * 1Mbps. This will be corrected on tx_time computation.
 	 */
 	tx_time = (device_constant + 10 * test_frame_len / rate);
 	estimated_retx = ((1 << (2 * ARITH_SHIFT)) / (s_unit - err));
-	result = (tx_time * estimated_retx) >> (2 * ARITH_SHIFT) ;
+	result = (tx_time * estimated_retx) >> (2 * ARITH_SHIFT);
 	return (u32)result;
 }
 

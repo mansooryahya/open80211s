@@ -256,6 +256,7 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 	do_posix_clock_monotonic_gettime(&uptime);
 	sta->last_connected = uptime.tv_sec;
 	ewma_init(&sta->avg_signal, 1024, 8);
+	ewma_init(&sta->avg_rate, 1, 32);
 
 	if (sta_prepare_rate_control(local, sta, gfp)) {
 		kfree(sta);

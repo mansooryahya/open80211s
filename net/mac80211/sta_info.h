@@ -323,6 +323,7 @@ struct sta_info {
 	unsigned long tx_retry_failed, tx_retry_count;
 	/* moving percentage of failed MSDUs */
 	unsigned int fail_avg;
+	struct ewma avg_rate;
 
 	/* Updated from TX path only, no locking requirements */
 	unsigned long tx_packets;
