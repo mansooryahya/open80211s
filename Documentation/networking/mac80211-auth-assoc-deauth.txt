@@ -24,7 +24,7 @@ end note
 end
 
 mac80211->driver: config(channel, channel type)
-mac80211->driver: bss_info_changed(set BSSID, basic rate bitmap)
+mac80211->driver: bss_info_changed(set BSSID, basic rate bitmap, timings)
 mac80211->driver: sta_state(AP, exists)
 
 alt no probe request data known

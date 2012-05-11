@@ -258,12 +258,11 @@ static int ieee80211_compatible_rates(const u8 *supp_rates, int supp_rates_len,
 }
 
 static void ieee80211_add_ht_ie(struct ieee80211_sub_if_data *sdata,
-				struct sk_buff *skb, const u8 *ht_oper_ie,
+				struct sk_buff *skb, u8 ap_ht_param,
 				struct ieee80211_supported_band *sband,
 				struct ieee80211_channel *channel,
 				enum ieee80211_smps_mode smps)
 {
-	struct ieee80211_ht_operation *ht_oper;
 	u8 *pos;
 	u32 flags = channel->flags;
 	u16 cap;
@@ -271,21 +270,13 @@ static void ieee80211_add_ht_ie(struct ieee80211_sub_if_data *sdata,
 
 	BUILD_BUG_ON(sizeof(ht_cap) != sizeof(sband->ht_cap));
 
-	if (!ht_oper_ie)
-		return;
-
-	if (ht_oper_ie[1] < sizeof(struct ieee80211_ht_operation))
-		return;
-
 	memcpy(&ht_cap, &sband->ht_cap, sizeof(ht_cap));
 	ieee80211_apply_htcap_overrides(sdata, &ht_cap);
-
-	ht_oper = (struct ieee80211_ht_operation *)(ht_oper_ie + 2);
 
 	/* determine capability flags */
 	cap = ht_cap.cap;
 
-	switch (ht_oper->ht_param & IEEE80211_HT_PARAM_CHA_SEC_OFFSET) {
+	switch (ap_ht_param & IEEE80211_HT_PARAM_CHA_SEC_OFFSET) {
 	case IEEE80211_HT_PARAM_CHA_SEC_ABOVE:
 		if (flags & IEEE80211_CHAN_NO_HT40PLUS) {
 			cap &= ~IEEE80211_HT_CAP_SUP_WIDTH_20_40;
@@ -509,7 +500,7 @@ static void ieee80211_send_assoc(struct ieee80211_sub_if_data *sdata)
 	}
 
 	if (!(ifmgd->flags & IEEE80211_STA_DISABLE_11N))
-		ieee80211_add_ht_ie(sdata, skb, assoc_data->ht_operation_ie,
+		ieee80211_add_ht_ie(sdata, skb, assoc_data->ap_ht_param,
 				    sband, local->oper_channel, ifmgd->ap_smps);
 
 	/* if present, add any custom non-vendor IEs that go after HT */
@@ -1268,11 +1259,6 @@ static void ieee80211_set_associated(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_bss_conf *bss_conf = &sdata->vif.bss_conf;
 
 	bss_info_changed |= BSS_CHANGED_ASSOC;
-	/* set timing information */
-	bss_conf->beacon_int = cbss->beacon_interval;
-	bss_conf->last_tsf = cbss->tsf;
-
-	bss_info_changed |= BSS_CHANGED_BEACON_INT;
 	bss_info_changed |= ieee80211_handle_bss_capability(sdata,
 		cbss->capability, bss->has_erp_value, bss->erp_value);
 
@@ -3150,9 +3136,15 @@ static int ieee80211_prep_connection(struct ieee80211_sub_if_data *sdata,
 
 		memcpy(ifmgd->bssid, cbss->bssid, ETH_ALEN);
 
-		/* tell driver about BSSID and basic rates */
+		/* set timing information */
+		sdata->vif.bss_conf.beacon_int = cbss->beacon_interval;
+		sdata->vif.bss_conf.sync_tsf = cbss->tsf;
+		sdata->vif.bss_conf.sync_device_ts = bss->device_ts;
+
+		/* tell driver about BSSID, basic rates and timing */
 		ieee80211_bss_info_change_notify(sdata,
-			BSS_CHANGED_BSSID | BSS_CHANGED_BASIC_RATES);
+			BSS_CHANGED_BSSID | BSS_CHANGED_BASIC_RATES |
+			BSS_CHANGED_BEACON_INT);
 
 		if (assoc)
 			sta_info_pre_move_state(sta, IEEE80211_STA_AUTH);
@@ -3276,7 +3268,7 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_bss *bss = (void *)req->bss->priv;
 	struct ieee80211_mgd_assoc_data *assoc_data;
 	struct ieee80211_supported_band *sband;
-	const u8 *ssidie;
+	const u8 *ssidie, *ht_ie;
 	int i, err;
 
 	ssidie = ieee80211_bss_get_ie(req->bss, WLAN_EID_SSID);
@@ -3363,8 +3355,13 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 			  (local->hw.queues >= IEEE80211_NUM_ACS);
 	assoc_data->supp_rates = bss->supp_rates;
 	assoc_data->supp_rates_len = bss->supp_rates_len;
-	assoc_data->ht_operation_ie =
-		ieee80211_bss_get_ie(req->bss, WLAN_EID_HT_OPERATION);
+
+	ht_ie = ieee80211_bss_get_ie(req->bss, WLAN_EID_HT_OPERATION);
+	if (ht_ie && ht_ie[1] >= sizeof(struct ieee80211_ht_operation))
+		assoc_data->ap_ht_param =
+			((struct ieee80211_ht_operation *)(ht_ie + 2))->ht_param;
+	else
+		ifmgd->flags |= IEEE80211_STA_DISABLE_11N;
 
 	if (bss->wmm_used && bss->uapsd_supported &&
 	    (sdata->local->hw.flags & IEEE80211_HW_SUPPORTS_UAPSD)) {

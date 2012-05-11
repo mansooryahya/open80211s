@@ -896,7 +896,11 @@ static int nl80211_send_wiphy(struct sk_buff *msg, u32 pid, u32 seq, int flags,
 		i++;
 		NLA_PUT_U32(msg, i, NL80211_CMD_SET_WIPHY_NETNS);
 	}
-	CMD(set_channel, SET_CHANNEL);
+	if (dev->ops->set_monitor_channel || dev->ops->start_ap ||
+	    dev->ops->join_mesh) {
+		i++;
+		NLA_PUT_U32(msg, i, NL80211_CMD_SET_CHANNEL);
+	}
 	CMD(set_wds_peer, SET_WDS_PEER);
 	if (dev->wiphy.flags & WIPHY_FLAG_SUPPORTS_TDLS) {
 		CMD(tdls_mgmt, TDLS_MGMT);
@@ -1124,10 +1128,14 @@ static int parse_txq_params(struct nlattr *tb[],
 static bool nl80211_can_set_dev_channel(struct wireless_dev *wdev)
 {
 	/*
-	 * You can only set the channel explicitly for AP, mesh
-	 * and WDS type interfaces; all others have their channel
-	 * managed via their respective "establish a connection"
-	 * command (connect, join, ...)
+	 * You can't set the channel explicitly, it is managed with
+	 * the "establish a connection" commands (connect, join, ...)
+	 *
+	 * For AP/GO and mesh mode, the channel can be set with the
+	 * channel userspace API, but is only stored and passed to the
+	 * low-level driver when the AP starts or the mesh is joined.
+	 * This is for backward compatibility, userspace can also give
+	 * the channel in the start-ap or join-mesh commands instead.
 	 *
 	 * Monitors are special as they are normally slaved to
 	 * whatever else is going on, so they behave as though
@@ -1135,19 +1143,44 @@ static bool nl80211_can_set_dev_channel(struct wireless_dev *wdev)
 	 */
 	return !wdev ||
 		wdev->iftype == NL80211_IFTYPE_AP ||
-		wdev->iftype == NL80211_IFTYPE_WDS ||
 		wdev->iftype == NL80211_IFTYPE_MESH_POINT ||
 		wdev->iftype == NL80211_IFTYPE_MONITOR ||
 		wdev->iftype == NL80211_IFTYPE_P2P_GO;
+}
+
+static bool nl80211_valid_channel_type(struct genl_info *info,
+				       enum nl80211_channel_type *channel_type)
+{
+	enum nl80211_channel_type tmp;
+
+	if (!info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE])
+		return false;
+
+	tmp = nla_get_u32(info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
+	if (tmp != NL80211_CHAN_NO_HT &&
+	    tmp != NL80211_CHAN_HT20 &&
+	    tmp != NL80211_CHAN_HT40PLUS &&
+	    tmp != NL80211_CHAN_HT40MINUS)
+		return false;
+
+	if (channel_type)
+		*channel_type = tmp;
+
+	return true;
 }
 
 static int __nl80211_set_channel(struct cfg80211_registered_device *rdev,
 				 struct wireless_dev *wdev,
 				 struct genl_info *info)
 {
+	struct ieee80211_channel *channel;
 	enum nl80211_channel_type channel_type = NL80211_CHAN_NO_HT;
 	u32 freq;
 	int result;
+	enum nl80211_iftype iftype = NL80211_IFTYPE_MONITOR;
+
+	if (wdev)
+		iftype = wdev->iftype;
 
 	if (!info->attrs[NL80211_ATTR_WIPHY_FREQ])
 		return -EINVAL;
@@ -1155,25 +1188,38 @@ static int __nl80211_set_channel(struct cfg80211_registered_device *rdev,
 	if (!nl80211_can_set_dev_channel(wdev))
 		return -EOPNOTSUPP;
 
-	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]) {
-		channel_type = nla_get_u32(info->attrs[
-				   NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
-		if (channel_type != NL80211_CHAN_NO_HT &&
-		    channel_type != NL80211_CHAN_HT20 &&
-		    channel_type != NL80211_CHAN_HT40PLUS &&
-		    channel_type != NL80211_CHAN_HT40MINUS)
-			return -EINVAL;
-	}
+	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE] &&
+	    !nl80211_valid_channel_type(info, &channel_type))
+		return -EINVAL;
 
 	freq = nla_get_u32(info->attrs[NL80211_ATTR_WIPHY_FREQ]);
 
 	mutex_lock(&rdev->devlist_mtx);
-	if (wdev) {
-		wdev_lock(wdev);
-		result = cfg80211_set_freq(rdev, wdev, freq, channel_type);
-		wdev_unlock(wdev);
-	} else {
-		result = cfg80211_set_freq(rdev, NULL, freq, channel_type);
+	switch (iftype) {
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_P2P_GO:
+		if (wdev->beacon_interval) {
+			result = -EBUSY;
+			break;
+		}
+		channel = rdev_freq_to_chan(rdev, freq, channel_type);
+		if (!channel || !cfg80211_can_beacon_sec_chan(&rdev->wiphy,
+							      channel,
+							      channel_type)) {
+			result = -EINVAL;
+			break;
+		}
+		wdev->preset_chan = channel;
+		wdev->preset_chantype = channel_type;
+		result = 0;
+		break;
+	case NL80211_IFTYPE_MESH_POINT:
+		result = cfg80211_set_mesh_freq(rdev, wdev, freq, channel_type);
+		break;
+	case NL80211_IFTYPE_MONITOR:
+		result = cfg80211_set_monitor_channel(rdev, freq, channel_type);
+	default:
+		result = -EINVAL;
 	}
 	mutex_unlock(&rdev->devlist_mtx);
 
@@ -2244,6 +2290,29 @@ static int nl80211_start_ap(struct sk_buff *skb, struct genl_info *info)
 			info->attrs[NL80211_ATTR_INACTIVITY_TIMEOUT]);
 	}
 
+	if (info->attrs[NL80211_ATTR_WIPHY_FREQ]) {
+		enum nl80211_channel_type channel_type = NL80211_CHAN_NO_HT;
+
+		if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE] &&
+		    !nl80211_valid_channel_type(info, &channel_type))
+			return -EINVAL;
+
+		params.channel = rdev_freq_to_chan(rdev,
+			nla_get_u32(info->attrs[NL80211_ATTR_WIPHY_FREQ]),
+			channel_type);
+		if (!params.channel)
+			return -EINVAL;
+		params.channel_type = channel_type;
+	} else if (wdev->preset_chan) {
+		params.channel = wdev->preset_chan;
+		params.channel_type = wdev->preset_chantype;
+	} else
+		return -EINVAL;
+
+	if (!cfg80211_can_beacon_sec_chan(&rdev->wiphy, params.channel,
+					  params.channel_type))
+		return -EINVAL;
+
 	err = rdev->ops->start_ap(&rdev->wiphy, dev, &params);
 	if (!err)
 		wdev->beacon_interval = params.beacon_interval;
@@ -2370,9 +2439,15 @@ static int parse_station_flags(struct genl_info *info,
 		return -EINVAL;
 	}
 
-	for (flag = 1; flag <= NL80211_STA_FLAG_MAX; flag++)
-		if (flags[flag])
+	for (flag = 1; flag <= NL80211_STA_FLAG_MAX; flag++) {
+		if (flags[flag]) {
 			params->sta_flags_set |= (1<<flag);
+
+			/* no longer support new API additions in old API */
+			if (flag > NL80211_STA_FLAG_MAX_OLD_API)
+				return -EINVAL;
+		}
+	}
 
 	return 0;
 }
@@ -2712,9 +2787,19 @@ static int nl80211_set_station(struct sk_buff *skb, struct genl_info *info)
 		/* accept only the listed bits */
 		if (params.sta_flags_mask &
 				~(BIT(NL80211_STA_FLAG_AUTHORIZED) |
+				  BIT(NL80211_STA_FLAG_AUTHENTICATED) |
+				  BIT(NL80211_STA_FLAG_ASSOCIATED) |
 				  BIT(NL80211_STA_FLAG_SHORT_PREAMBLE) |
 				  BIT(NL80211_STA_FLAG_WME) |
 				  BIT(NL80211_STA_FLAG_MFP)))
+			return -EINVAL;
+
+		/* but authenticated/associated only if driver handles it */
+		if (!(rdev->wiphy.features &
+				NL80211_FEATURE_FULL_AP_CLIENT_STATE) &&
+		    params.sta_flags_mask &
+				(BIT(NL80211_STA_FLAG_AUTHENTICATED) |
+				 BIT(NL80211_STA_FLAG_ASSOCIATED)))
 			return -EINVAL;
 
 		/* must be last in here for error handling */
@@ -2870,17 +2955,31 @@ static int nl80211_new_station(struct sk_buff *skb, struct genl_info *info)
 		/* but don't bother the driver with it */
 		params.sta_flags_mask &= ~BIT(NL80211_STA_FLAG_TDLS_PEER);
 
+		/* allow authenticated/associated only if driver handles it */
+		if (!(rdev->wiphy.features &
+				NL80211_FEATURE_FULL_AP_CLIENT_STATE) &&
+		    params.sta_flags_mask &
+				(BIT(NL80211_STA_FLAG_AUTHENTICATED) |
+				 BIT(NL80211_STA_FLAG_ASSOCIATED)))
+			return -EINVAL;
+
 		/* must be last in here for error handling */
 		params.vlan = get_vlan(info, rdev);
 		if (IS_ERR(params.vlan))
 			return PTR_ERR(params.vlan);
 		break;
 	case NL80211_IFTYPE_MESH_POINT:
+		/* associated is disallowed */
+		if (params.sta_flags_mask & BIT(NL80211_STA_FLAG_ASSOCIATED))
+			return -EINVAL;
 		/* TDLS peers cannot be added */
 		if (params.sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER))
 			return -EINVAL;
 		break;
 	case NL80211_IFTYPE_STATION:
+		/* associated is disallowed */
+		if (params.sta_flags_mask & BIT(NL80211_STA_FLAG_ASSOCIATED))
+			return -EINVAL;
 		/* Only TDLS peers can be added */
 		if (!(params.sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER)))
 			return -EINVAL;
@@ -4835,12 +4934,7 @@ static int nl80211_join_ibss(struct sk_buff *skb, struct genl_info *info)
 	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]) {
 		enum nl80211_channel_type channel_type;
 
-		channel_type = nla_get_u32(
-				info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
-		if (channel_type != NL80211_CHAN_NO_HT &&
-		    channel_type != NL80211_CHAN_HT20 &&
-		    channel_type != NL80211_CHAN_HT40MINUS &&
-		    channel_type != NL80211_CHAN_HT40PLUS)
+		if (!nl80211_valid_channel_type(info, &channel_type))
 			return -EINVAL;
 
 		if (channel_type != NL80211_CHAN_NO_HT &&
@@ -5407,15 +5501,9 @@ static int nl80211_remain_on_channel(struct sk_buff *skb,
 	    !(rdev->wiphy.flags & WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL))
 		return -EOPNOTSUPP;
 
-	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]) {
-		channel_type = nla_get_u32(
-			info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
-		if (channel_type != NL80211_CHAN_NO_HT &&
-		    channel_type != NL80211_CHAN_HT20 &&
-		    channel_type != NL80211_CHAN_HT40PLUS &&
-		    channel_type != NL80211_CHAN_HT40MINUS)
-			return -EINVAL;
-	}
+	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE] &&
+	    !nl80211_valid_channel_type(info, &channel_type))
+		return -EINVAL;
 
 	freq = nla_get_u32(info->attrs[NL80211_ATTR_WIPHY_FREQ]);
 	chan = rdev_freq_to_chan(rdev, freq, channel_type);
@@ -5685,12 +5773,7 @@ static int nl80211_tx_mgmt(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]) {
-		channel_type = nla_get_u32(
-			info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
-		if (channel_type != NL80211_CHAN_NO_HT &&
-		    channel_type != NL80211_CHAN_HT20 &&
-		    channel_type != NL80211_CHAN_HT40PLUS &&
-		    channel_type != NL80211_CHAN_HT40MINUS)
+		if (!nl80211_valid_channel_type(info, &channel_type))
 			return -EINVAL;
 		channel_type_valid = true;
 	}
@@ -5944,6 +6027,24 @@ static int nl80211_join_mesh(struct sk_buff *skb, struct genl_info *info)
 		err = nl80211_parse_mesh_setup(info, &setup);
 		if (err)
 			return err;
+	}
+
+	if (info->attrs[NL80211_ATTR_WIPHY_FREQ]) {
+		enum nl80211_channel_type channel_type = NL80211_CHAN_NO_HT;
+
+		if (info->attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE] &&
+		    !nl80211_valid_channel_type(info, &channel_type))
+			return -EINVAL;
+
+		setup.channel = rdev_freq_to_chan(rdev,
+			nla_get_u32(info->attrs[NL80211_ATTR_WIPHY_FREQ]),
+			channel_type);
+		if (!setup.channel)
+			return -EINVAL;
+		setup.channel_type = channel_type;
+	} else {
+		/* cfg80211_join_mesh() will sort it out */
+		setup.channel = NULL;
 	}
 
 	return cfg80211_join_mesh(rdev, dev, &setup, &cfg);

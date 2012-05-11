@@ -233,8 +233,10 @@ enum ieee80211_rssi_event {
  *	valid in station mode only while @assoc is true and if also
  *	requested by %IEEE80211_HW_NEED_DTIM_PERIOD (cf. also hw conf
  *	@ps_dtim_period)
- * @last_tsf: last beacon's/probe response's TSF timestamp (could be old
+ * @sync_tsf: last beacon's/probe response's TSF timestamp (could be old
  *	as it may have been received during scanning long ago)
+ * @sync_device_ts: the device timestamp corresponding to the sync_tsf,
+ *	the driver/device can use this to calculate synchronisation
  * @beacon_int: beacon interval
  * @assoc_capability: capabilities taken from assoc resp
  * @basic_rates: bitmap of basic rates, each bit stands for an
@@ -281,7 +283,7 @@ struct ieee80211_bss_conf {
 	u8 dtim_period;
 	u16 beacon_int;
 	u16 assoc_capability;
-	u64 last_tsf;
+	u64 sync_tsf, sync_device_ts;
 	u32 basic_rates;
 	int mcast_rate[IEEE80211_NUM_BANDS];
 	u16 ht_operation_mode;
@@ -667,6 +669,9 @@ ieee80211_tx_info_clear_status(struct ieee80211_tx_info *info)
  * @RX_FLAG_SHORT_GI: Short guard interval was used
  * @RX_FLAG_NO_SIGNAL_VAL: The signal strength value is not present.
  *	Valid only for data frames (mainly A-MPDU)
+ * @RX_FLAG_HT_GF: This frame was received in a HT-greenfield transmission, if
+ *	the driver fills this value it should add %IEEE80211_RADIOTAP_MCS_HAVE_FMT
+ *	to hw.radiotap_mcs_details to advertise that fact
  */
 enum mac80211_rx_flags {
 	RX_FLAG_MMIC_ERROR	= 1<<0,
@@ -681,6 +686,7 @@ enum mac80211_rx_flags {
 	RX_FLAG_40MHZ		= 1<<10,
 	RX_FLAG_SHORT_GI	= 1<<11,
 	RX_FLAG_NO_SIGNAL_VAL	= 1<<12,
+	RX_FLAG_HT_GF		= 1<<13,
 };
 
 /**
@@ -692,6 +698,8 @@ enum mac80211_rx_flags {
  *
  * @mactime: value in microseconds of the 64-bit Time Synchronization Function
  * 	(TSF) timer when the first data symbol (MPDU) arrived at the hardware.
+ * @device_timestamp: arbitrary timestamp for the device, mac80211 doesn't use
+ *	it but can store it and pass it back to the driver for synchronisation
  * @band: the active band when this frame was received
  * @freq: frequency the radio was tuned to when receiving this frame, in MHz
  * @signal: signal strength when receiving this frame, either in dBm, in dB or
@@ -705,6 +713,7 @@ enum mac80211_rx_flags {
  */
 struct ieee80211_rx_status {
 	u64 mactime;
+	u64 device_timestamp;
 	enum ieee80211_band band;
 	int freq;
 	int signal;
@@ -1288,6 +1297,11 @@ enum ieee80211_hw_flags {
  *
  * @offchannel_tx_hw_queue: HW queue ID to use for offchannel TX
  *	(if %IEEE80211_HW_QUEUE_CONTROL is set)
+ *
+ * @radiotap_mcs_details: lists which MCS information can the HW
+ *	reports, by default it is set to _MCS, _GI and _BW but doesn't
+ *	include _FMT. Use %IEEE80211_RADIOTAP_MCS_HAVE_* values, only
+ *	adding _BW is supported today.
  */
 struct ieee80211_hw {
 	struct ieee80211_conf conf;
@@ -1309,6 +1323,7 @@ struct ieee80211_hw {
 	u8 max_rx_aggregation_subframes;
 	u8 max_tx_aggregation_subframes;
 	u8 offchannel_tx_hw_queue;
+	u8 radiotap_mcs_details;
 };
 
 /**
