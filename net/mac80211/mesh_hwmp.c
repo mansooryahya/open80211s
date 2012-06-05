@@ -350,7 +350,7 @@ static unsigned int rssi_get_rate(struct sta_info *sta)
 	if (ht_cap->ht_supported) {
 		for (i = 0; i < IEEE80211_HT_MCS_MASK_LEN; i++) {
 			if (ht_cap->mcs.rx_mask[i])
-				maxidx = i * 8 + fls(ht_cap->mcs.rx_mask[i]);
+				maxidx = i*8 + fls(ht_cap->mcs.rx_mask[i]) - 1;
 		}
 		rinfo.flags |= RATE_INFO_FLAGS_MCS;
 		rinfo.flags |= (sta->sta.ht_cap.cap &
@@ -366,7 +366,9 @@ static unsigned int rssi_get_rate(struct sta_info *sta)
 	} else {
 		struct ieee80211_supported_band *sband;
 
-		maxidx = fls(sta->sta.supp_rates[band]);
+		maxidx = fls(sta->sta.supp_rates[band]) - 1;
+		if (WARN_ON(maxidx < 0))
+			return rate_min;
 		sband = sta->local->hw.wiphy->bands[band];
 		rinfo.legacy = sband->bitrates[maxidx].bitrate;
 	}
