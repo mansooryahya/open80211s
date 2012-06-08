@@ -2497,6 +2497,8 @@ struct sk_buff *ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
 			pr_err("o11s: couldn't add ies!\n");
 			goto out;
 		}
+
+		ieee80211_mps_awake_window_start(sdata);
 	} else {
 		WARN_ON(1);
 		goto out;

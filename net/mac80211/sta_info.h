@@ -84,6 +84,8 @@ enum ieee80211_sta_info_flags {
 	WLAN_STA_TOFFSET_KNOWN,
 	WLAN_STA_MPSP_OWNER,
 	WLAN_STA_MPSP_RECIPIENT,
+	WLAN_STA_MPS_WAIT_FOR_BEACON,
+	WLAN_STA_MPS_WAIT_FOR_CAB,
 };
 
 #define ADDBA_RESP_INTERVAL HZ
@@ -286,6 +288,11 @@ struct sta_ampdu_mlme {
  * @local_pm_timer: timer for delayed setting of local_pm
  * @peer_pm: peer-specific power save mode towards local STA
  * @nonpeer_pm: STA power save mode towards non-peer neighbors
+ * @mps_schedule_timer: timer to trigger wakeup and sleep events for beacons RX
+ * @beacon_interval: beacon interval of neighbor STA (in jiffies)
+ * @last_beacon_rx: time of last beacon receipt (in jiffies)
+ * @tbtt_wakeup: time to wakeup for this STA beacon (in jiffies)
+ * @tbtt_miss: time to give up waiting for this STA beacon (in jiffies)
  * @debugfs: debug filesystem info
  * @dead: set to true when sta is unlinked
  * @uploaded: set to true when sta is uploaded to the driver
@@ -390,6 +397,11 @@ struct sta_info {
 	struct timer_list local_pm_timer;
 	enum nl80211_mesh_power_mode peer_pm;
 	enum nl80211_mesh_power_mode nonpeer_pm;
+	struct timer_list mps_schedule_timer;
+	unsigned long beacon_interval;	/* in jiffies units */
+	unsigned long last_beacon_rx;
+	unsigned long tbtt_wakeup;
+	unsigned long tbtt_miss;
 #endif
 
 #ifdef CONFIG_MAC80211_DEBUGFS

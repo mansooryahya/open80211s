@@ -391,13 +391,13 @@ static struct sta_info *mesh_peer_init(struct ieee80211_sub_if_data *sdata,
 }
 
 void mesh_neighbour_update(struct ieee80211_sub_if_data *sdata,
-			   u8 *hw_addr,
+			   struct ieee80211_mgmt *mgmt,
 			   struct ieee802_11_elems *elems)
 {
 	struct sta_info *sta;
 
 	rcu_read_lock();
-	sta = mesh_peer_init(sdata, hw_addr, elems);
+	sta = mesh_peer_init(sdata, mgmt->sa, elems);
 	if (!sta)
 		goto out;
 
@@ -409,6 +409,7 @@ void mesh_neighbour_update(struct ieee80211_sub_if_data *sdata,
 		mesh_plink_open(sta);
 
 	ieee80211_mps_frame_release(sta, elems);
+	ieee80211_mps_schedule_update(sta, mgmt, elems->tim);
 out:
 	rcu_read_unlock();
 }

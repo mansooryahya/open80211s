@@ -134,6 +134,7 @@ static void free_sta_work(struct work_struct *wk)
 		mesh_plink_deactivate(sta);
 		del_timer_sync(&sta->plink_timer);
 		del_timer_sync(&sta->local_pm_timer);
+		del_timer_sync(&sta->mps_schedule_timer);
 	}
 #endif
 
@@ -355,6 +356,9 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 	sta->plink_state = NL80211_PLINK_LISTEN;
 	init_timer(&sta->plink_timer);
 	setup_timer(&sta->local_pm_timer, ieee80211_mps_sta_local_pm_timer,
+		    (unsigned long) sta);
+	setup_timer(&sta->mps_schedule_timer,
+		    ieee80211_mps_sta_schedule_timer,
 		    (unsigned long) sta);
 #endif
 

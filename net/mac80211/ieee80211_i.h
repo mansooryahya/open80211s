@@ -570,6 +570,12 @@ struct ieee80211_mesh_sync_ops {
 	/* add other framework functions here */
 };
 
+enum mesh_ps_status_flags {
+	MPS_WAIT_FOR_BEACON,
+	MPS_WAIT_FOR_CAB,
+	MPS_IN_AWAKE_WINDOW,
+};
+
 struct ieee80211_if_mesh {
 	struct timer_list housekeeping_timer;
 	struct timer_list mesh_path_timer;
@@ -630,6 +636,8 @@ struct ieee80211_if_mesh {
 	int ps_peers_deep_sleep;
 	struct ps_data ps;
 	atomic_t num_mpsp; /* counts both owner and recipient independently */
+	struct timer_list awake_window_end_timer;
+	unsigned long ps_status_flags;
 };
 
 #ifdef CONFIG_MAC80211_MESH
@@ -1114,7 +1122,7 @@ struct ieee80211_local {
 	bool pspolling;
 	bool offchannel_ps_enabled;
 	/*
-	 * PS can only be enabled when we have exactly one managed
+	 * managed mode PS can only be enabled when we have exactly one managed
 	 * interface (and monitors) in PS, this then points there.
 	 */
 	struct ieee80211_sub_if_data *ps_sdata;
@@ -1133,6 +1141,10 @@ struct ieee80211_local {
 	bool disable_dynamic_ps;
 
 	int user_power_level; /* in dBm, for all interfaces */
+
+	/* device with one or multipe mesh vif is in mesh PS mode */
+	bool mps_enabled;
+	const struct ieee80211_mps_ops *mps_ops;
 
 	enum ieee80211_smps_mode smps_mode;
 

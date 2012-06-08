@@ -9,6 +9,12 @@
 
 #include "mesh.h"
 #include "wme.h"
+#include <linux/export.h>
+
+/* time to wakeup before and stay awake after peer TBTT until beacon receipt
+ * needed to cope with stack delay and HW wakeup time
+ */
+#define MPS_TBTT_MARGIN	20000	/* in us units */
 
 
 static inline bool test_and_set_mpsp_flag(struct sta_info *sta,
@@ -158,6 +164,9 @@ void ieee80211_mps_local_status_update(struct ieee80211_sub_if_data *sdata)
 
 	ifmsh->ps_peers_light_sleep = light_sleep_cnt;
 	ifmsh->ps_peers_deep_sleep = deep_sleep_cnt;
+
+	set_bit(MESH_WORK_PS_HW_CONF, &sdata->u.mesh.wrkq_flags);
+	ieee80211_queue_work(&sdata->local->hw, &sdata->work);
 }
 
 /**
@@ -196,6 +205,10 @@ void ieee80211_mps_set_sta_local_pm(struct sta_info *sta,
 	 */
 	if (sta->plink_state == NL80211_PLINK_ESTAB)
 		mps_qos_null_tx(sta);
+
+	/* only sleep once all beacons are received */
+	if (pm != NL80211_MESH_POWER_ACTIVE)
+		set_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON);
 
 	ieee80211_mps_local_status_update(sdata);
 }
@@ -642,3 +655,326 @@ void ieee80211_mps_frame_release(struct sta_info *sta,
 	else
 		mps_frame_deliver(sta, 1);
 }
+
+
+/* mesh PS driver configuration and doze scheduling */
+
+/*
+ * DOC:
+ * Generally, in mesh PS we have the issue that everything is per-STA. So
+ * each time we have to check the PS status, we should check all sta_info.
+ * To reduce computational load we use redundant information in ifmsh that is
+ * just an or-combination of the information of the sta_info. Before going to
+ * doze state we update that information. Wakeup is performed immediately.
+ *
+ * Since the device keeps its own sleep/wakeup cycle, we can never be sure
+ * in which state it currently is. As a consequence some doze/wakeup calls to
+ * the driver may be redundant. Despite these the device is supposed to keep a
+ * sane state.
+ */
+
+/**
+ * ieee80211_mps_hw_conf - check conditions for mesh PS and configure driver
+ *
+ * @local: local interface data
+ */
+void ieee80211_mps_hw_conf(struct ieee80211_local *local)
+{
+	struct ieee80211_sub_if_data *sdata;
+	struct ieee80211_if_mesh *ifmsh;
+	bool enable = true;
+
+	if (!local->mps_ops)
+		return;
+
+	mutex_lock(&local->iflist_mtx);
+	list_for_each_entry(sdata, &local->interfaces, list) {
+		if (!ieee80211_sdata_running(sdata))
+			continue;
+
+		/* If an AP or any other non-mesh vif is found, disable PS */
+		if (sdata->vif.type != NL80211_IFTYPE_MESH_POINT) {
+			enable = false;
+			break;
+		}
+
+		ifmsh = &sdata->u.mesh;
+
+		/* check for non-peer power mode, check for links in active
+		 * mode. Assume a valid power mode is set for each established
+		 * peer link
+		 */
+		if (ifmsh->nonpeer_pm == NL80211_MESH_POWER_ACTIVE ||
+		    ifmsh->ps_peers_light_sleep + ifmsh->ps_peers_deep_sleep
+				< atomic_read(&ifmsh->estab_plinks)) {
+			enable = false;
+			break;
+		}
+
+		/* only doze once all beacons are received */
+		set_bit(MPS_WAIT_FOR_BEACON, &ifmsh->ps_status_flags);
+	}
+	mutex_unlock(&local->iflist_mtx);
+
+	if (local->mps_enabled == enable)
+		return;
+
+	local->mps_enabled = enable;
+	if (enable)
+		local->hw.conf.flags |= IEEE80211_CONF_PS;
+	else
+		local->hw.conf.flags &= ~IEEE80211_CONF_PS;
+	ieee80211_hw_config(local, IEEE80211_CONF_CHANGE_PS);
+}
+
+/**
+ * ieee80211_mps_schedule_update - update wakeup schedule for peer beacon
+ *
+ * @sta: mesh STA
+ * @mgmt: beacon frame
+ * @tim: TIM IE of beacon frame
+ */
+void ieee80211_mps_schedule_update(struct sta_info *sta,
+				   struct ieee80211_mgmt *mgmt,
+				   struct ieee80211_tim_ie *tim)
+{
+	struct ieee80211_sub_if_data *sdata = sta->sdata;
+	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+	int skip = 1;
+	unsigned long nexttbtt, margin = usecs_to_jiffies(MPS_TBTT_MARGIN);
+
+	if (!sdata->local->mps_enabled ||
+	    sta->plink_state != NL80211_PLINK_ESTAB)
+		return;
+
+	/* simple Deep Sleep implementation: only wake up for DTIM beacons */
+	if (sta->local_pm == NL80211_MESH_POWER_DEEP_SLEEP &&
+	    tim->dtim_count == 0)
+		skip = tim->dtim_period;
+
+	clear_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON);
+	/* pending broadcasts after DTIM beacon? TODO reset after RX */
+	if (tim->bitmap_ctrl & 0x01) {
+		set_bit(MPS_WAIT_FOR_CAB, &ifmsh->ps_status_flags);
+		set_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_CAB);
+	} else {
+		clear_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_CAB);
+	}
+
+	sta->last_beacon_rx = jiffies;
+	sta->beacon_interval = usecs_to_jiffies(le16_to_cpu(
+			mgmt->u.beacon.beacon_int) * 1024);
+	nexttbtt = sta->last_beacon_rx + sta->beacon_interval * skip;
+	sta->tbtt_wakeup = nexttbtt - margin;
+	sta->tbtt_miss = nexttbtt + margin;
+
+	mps_dbg(sdata, "updating %pM : BI=%d, DP=%d, DC=%d\n",
+		sta->sta.addr, jiffies_to_usecs(sta->beacon_interval),
+		tim->dtim_period, tim->dtim_count);
+
+	mod_timer(&sta->mps_schedule_timer, sta->tbtt_wakeup);
+
+	set_bit(MESH_WORK_PS_DOZE, &ifmsh->wrkq_flags);
+	ieee80211_queue_work(&sdata->local->hw, &sdata->work);
+}
+
+/**
+ * ieee80211_mps_sta_schedule_timer - timer for mesh PS doze/wakeup
+ *
+ * Used for both waking up and going to doze state again in case the beacon is
+ * not received on time.
+ */
+void ieee80211_mps_sta_schedule_timer(unsigned long data)
+{
+	/* This STA is valid because free_sta_work() will
+	 * del_timer_sync() this timer after having made sure
+	 * it cannot be armed (by deleting the plink.)
+	 */
+	struct sta_info *sta = (struct sta_info *) data;
+	struct ieee80211_sub_if_data *sdata = sta->sdata;
+	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+
+	if (!sdata->local->mps_enabled ||
+	    sta->plink_state != NL80211_PLINK_ESTAB)
+		return;
+
+	if (!test_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON)) {
+		/* peer will send its beacon soon -> wakeup (and stay up) */
+		set_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON);
+		set_bit(MPS_WAIT_FOR_BEACON, &ifmsh->ps_status_flags);
+
+		mps_dbg(sdata, "wakeup for %pM (margin %dus)\n",
+			sta->sta.addr,
+			jiffies_to_usecs(sta->tbtt_miss - sta->tbtt_wakeup));
+
+		mod_timer(&sta->mps_schedule_timer, sta->tbtt_miss);
+
+		set_bit(MESH_WORK_PS_WAKEUP, &ifmsh->wrkq_flags);
+		ieee80211_queue_work(&sdata->local->hw, &sdata->work);
+	} else {
+		unsigned long margin, nexttbtt;
+		int miss_cnt = -1;
+
+		/* we missed the peer beacon this time */
+		clear_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON);
+
+		/* determine next TBTT based on last successful RX */
+		nexttbtt = sta->last_beacon_rx;
+		while (time_is_before_jiffies(nexttbtt)) {
+			nexttbtt += sta->beacon_interval;
+			miss_cnt++;
+		}
+
+		mps_dbg(sdata, "%pM beacon miss #%d\n", sta->sta.addr,
+			miss_cnt);
+
+		/* increase safety margin with miss_cnt */
+		margin = usecs_to_jiffies(MPS_TBTT_MARGIN * miss_cnt);
+		if (WARN_ON(margin >= sta->beacon_interval)) {
+			set_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON);
+			return;
+		}
+
+		sta->tbtt_wakeup = nexttbtt - margin;
+		sta->tbtt_miss = nexttbtt + margin;
+
+		mod_timer(&sta->mps_schedule_timer, sta->tbtt_wakeup);
+
+		set_bit(MESH_WORK_PS_DOZE, &ifmsh->wrkq_flags);
+		ieee80211_queue_work(&sdata->local->hw, &sdata->work);
+	}
+}
+
+/**
+ * ieee80211_mps_awake_window_start - start awake window on SWBA event
+ *
+ * @sdata: local mesh subif
+ *
+ * All tested hardware wakes up on its own on SWBA, so we currently do not
+ * trigger a wakeup here
+ */
+void ieee80211_mps_awake_window_start(struct ieee80211_sub_if_data *sdata)
+{
+	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+
+	if (!sdata->local->mps_enabled)
+		return;
+
+	mps_dbg(sdata, "awake window start (%dTU)\n",
+		ifmsh->mshcfg.dot11MeshAwakeWindowDuration);
+
+	set_bit(MPS_IN_AWAKE_WINDOW, &ifmsh->ps_status_flags);
+	mod_timer(&ifmsh->awake_window_end_timer, jiffies + usecs_to_jiffies(
+			ifmsh->mshcfg.dot11MeshAwakeWindowDuration * 1024));
+}
+
+/**
+ * ieee80211_mps_awake_window_end - timer for end of mesh Awake Window
+ */
+void ieee80211_mps_awake_window_end(unsigned long data)
+{
+	struct ieee80211_sub_if_data *sdata = (void *) data;
+	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+
+	if (!sdata->local->mps_enabled)
+		return;
+
+	mps_dbg(sdata, "awake window end\n");
+	clear_bit(MPS_IN_AWAKE_WINDOW, &ifmsh->ps_status_flags);
+
+	set_bit(MESH_WORK_PS_DOZE, &ifmsh->wrkq_flags);
+	ieee80211_queue_work(&sdata->local->hw, &sdata->work);
+}
+
+/**
+ * ieee80211_mps_hw_doze - check conditions and trigger radio doze state
+ *
+ * @sdata: local mesh subif
+ */
+void ieee80211_mps_hw_doze(struct ieee80211_sub_if_data *sdata)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+	struct sta_info *sta;
+	bool stay_awake = false;
+
+	/* PS blocker:
+	 * - mesh PS disabled
+	 * - in Awake Window
+	 * - in Mesh Peer Service Period
+	 * - waiting for peer beacon
+	 * - waiting for peer CAB frames
+	 */
+	if (!local->mps_enabled ||
+	    test_bit(MPS_IN_AWAKE_WINDOW, &ifmsh->ps_status_flags) ||
+	    atomic_read(&ifmsh->num_mpsp))
+		return;
+
+	mutex_lock(&local->sta_mtx);
+	list_for_each_entry(sta, &local->sta_list, list) {
+		if (!ieee80211_vif_is_mesh(&sta->sdata->vif) ||
+		    !ieee80211_sdata_running(sta->sdata) ||
+		    sta->plink_state != NL80211_PLINK_ESTAB) {
+			continue;
+		} else if (test_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_BEACON)) {
+			mps_dbg(sdata, "waiting for beacon of %pM\n",
+				sta->sta.addr);
+			stay_awake = true;
+			break;
+		} else if (test_sta_flag(sta, WLAN_STA_MPS_WAIT_FOR_CAB)) {
+			mps_dbg(sdata, "waiting for CAB from %pM\n",
+				sta->sta.addr);
+			stay_awake = true;
+			break;
+		}
+	}
+	mutex_unlock(&local->sta_mtx);
+
+	if (stay_awake)
+		return;
+
+	clear_bit(MPS_WAIT_FOR_BEACON, &ifmsh->ps_status_flags);
+	clear_bit(MPS_WAIT_FOR_CAB, &ifmsh->ps_status_flags);
+	if (local->mps_ops)
+		local->mps_ops->hw_doze(&sdata->local->hw);
+}
+
+int ieee80211_mps_hw_init(struct ieee80211_hw *hw,
+			  const struct ieee80211_mps_ops *ops)
+{
+	struct ieee80211_local *local = hw_to_local(hw);
+
+	local->mps_ops = ops;
+	if (!ops)
+		local->mps_enabled = false;
+
+	return 0;
+}
+EXPORT_SYMBOL(ieee80211_mps_hw_init);
+
+bool ieee80211_mps_hw_doze_allow(struct ieee80211_hw *hw)
+{
+	struct ieee80211_local *local = hw_to_local(hw);
+	struct ieee80211_sub_if_data *sdata;
+	struct ieee80211_if_mesh *ifmsh;
+	bool allow = true;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(sdata, &local->interfaces, list) {
+		if (!ieee80211_vif_is_mesh(&sdata->vif))
+			continue;
+
+		ifmsh = &sdata->u.mesh;
+		if (atomic_read(&ifmsh->num_mpsp) ||
+		    test_bit(MPS_IN_AWAKE_WINDOW, &ifmsh->ps_status_flags) ||
+		    test_bit(MPS_WAIT_FOR_BEACON, &ifmsh->ps_status_flags) ||
+		    test_bit(MPS_WAIT_FOR_CAB, &ifmsh->ps_status_flags)) {
+			allow = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return allow;
+}
+EXPORT_SYMBOL(ieee80211_mps_hw_doze_allow);

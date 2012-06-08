@@ -3935,6 +3935,55 @@ void ieee80211_stop_rx_ba_session(struct ieee80211_vif *vif, u16 ba_rx_bitmap,
  */
 void ieee80211_send_bar(struct ieee80211_vif *vif, u8 *ra, u16 tid, u16 ssn);
 
+/**
+ * struct ieee80211_mps_ops - callbacks from mac80211 to driver for mesh PS
+ *
+ * This structure contains callbacks that the driver has to or may handle for
+ * mesh powersave. XXX Add further callbacks for HW that performs certain
+ * mesh PS tasks on its own (e.g. assign HW list of STA to track).
+ *
+ * @hw_doze: put the radio to doze state to conserve power
+ * @hw_wakeup: wake up the radio now to receive frames again
+ */
+struct ieee80211_mps_ops {
+	void (*hw_doze)(struct ieee80211_hw *hw);
+	void (*hw_wakeup)(struct ieee80211_hw *hw);
+};
+
+#ifdef CONFIG_MAC80211_MESH
+/**
+ * ieee80211_mps_hw_init - register the callbacks for mesh PS of this HW
+ *
+ * @hw: the hardware
+ * @ops: callbacks for this device
+ *
+ * called by driver on mesh interface add/remove XXX add HW capability flags
+ */
+int ieee80211_mps_hw_init(struct ieee80211_hw *hw,
+			  const struct ieee80211_mps_ops *ops);
+
+/**
+ * ieee80211_mps_hw_doze_allow - check if radio may be set to doze state
+ *
+ * @hw: the hardware
+ *
+ * Allow or permit to put the HW to doze state based on the status of mesh
+ * powersave parameters tracked by mac80211. After wakeup (e.g. for TX) the
+ * driver typically tries to go to sleep again very quickly. In these
+ * situations this function is intended to block the driver from going to sleep
+ * mode. Since it may be called very frequently we spent effort to maintain
+ * the mesh PS status parameters in ifmsh (instead of iterating the STA list).
+ */
+bool ieee80211_mps_hw_doze_allow(struct ieee80211_hw *hw);
+#else
+static inline int ieee80211_mps_hw_init(struct ieee80211_hw *hw,
+					const struct ieee80211_mps_ops *ops)
+{ return 0; }
+
+static inline bool ieee80211_mps_hw_doze_allow(struct ieee80211_hw *hw)
+{ return true; }
+#endif
+
 /* Rate control API */
 
 /**

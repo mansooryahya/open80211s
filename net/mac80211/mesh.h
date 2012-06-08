@@ -58,6 +58,10 @@ enum mesh_path_flags {
  * @MESH_WORK_ROOT: the mesh root station needs to send a frame
  * @MESH_WORK_DRIFT_ADJUST: time to compensate for clock drift relative to other
  * mesh nodes
+ * @MESH_WORK_PS_HW_CONF: configure hardware according to the link-specific
+ * mesh power modes
+ * @MESH_WORK_PS_DOZE: put the hardware to sleep after checking all conditions
+ * @MESH_WORK_PS_WAKEUP: wake the hardware up immediately
  */
 enum mesh_deferred_task_flags {
 	MESH_WORK_HOUSEKEEPING,
@@ -65,6 +69,9 @@ enum mesh_deferred_task_flags {
 	MESH_WORK_GROW_MPP_TABLE,
 	MESH_WORK_ROOT,
 	MESH_WORK_DRIFT_ADJUST,
+	MESH_WORK_PS_HW_CONF,
+	MESH_WORK_PS_DOZE,
+	MESH_WORK_PS_WAKEUP,
 };
 
 /**
@@ -260,6 +267,14 @@ void ieee80211_mpsp_trigger_process(struct ieee80211_hdr *hdr,
 				    struct sta_info *sta, bool tx, bool acked);
 void ieee80211_mps_frame_release(struct sta_info *sta,
 				 struct ieee802_11_elems *elems);
+void ieee80211_mps_hw_conf(struct ieee80211_local *local);
+void ieee80211_mps_schedule_update(struct sta_info *sta,
+				   struct ieee80211_mgmt *mgmt,
+				   struct ieee80211_tim_ie *tim);
+void ieee80211_mps_sta_schedule_timer(unsigned long data);
+void ieee80211_mps_awake_window_start(struct ieee80211_sub_if_data *sdata);
+void ieee80211_mps_awake_window_end(unsigned long data);
+void ieee80211_mps_hw_doze(struct ieee80211_sub_if_data *sdata);
 
 /* Mesh paths */
 int mesh_nexthop_lookup(struct sk_buff *skb,
@@ -285,7 +300,7 @@ int mesh_path_send_to_gates(struct mesh_path *mpath);
 int mesh_gate_num(struct ieee80211_sub_if_data *sdata);
 /* Mesh plinks */
 void mesh_neighbour_update(struct ieee80211_sub_if_data *sdata,
-			   u8 *hw_addr,
+			   struct ieee80211_mgmt *mgmt,
 			   struct ieee802_11_elems *ie);
 bool mesh_peer_accepts_plinks(struct ieee802_11_elems *ie);
 u32 mesh_accept_plinks_update(struct ieee80211_sub_if_data *sdata);
