@@ -2616,6 +2616,8 @@ static int ieee80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	u32 flags;
 	int ret;
 
+	printk(KERN_DEBUG "ieee80211_mgmt_tx 0\n");
+
 	if (dont_wait_for_ack)
 		flags = IEEE80211_TX_CTL_NO_ACK;
 	else

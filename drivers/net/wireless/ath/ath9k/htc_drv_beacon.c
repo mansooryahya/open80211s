@@ -372,8 +372,10 @@ static void ath9k_htc_send_beacon(struct ath9k_htc_priv *priv,
 	}
 
 	/* after the SWBA interrupt the device is already awake */
-	if (priv->ps_enabled && priv->ah->power_mode != ATH9K_PM_AWAKE)
+	if (priv->ps_enabled && priv->ah->power_mode != ATH9K_PM_AWAKE) {
 		priv->ah->power_mode = ATH9K_PM_AWAKE;
+		ath_dbg(common, RESET, "NETWORK SLEEP -> AWAKE (SWBA)\n");
+	}
 
 	/* Get a new beacon */
 	beacon = ieee80211_beacon_get(priv->hw, vif);

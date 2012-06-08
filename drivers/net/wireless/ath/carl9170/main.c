@@ -801,6 +801,11 @@ static int carl9170_ps_update(struct ar9170 *ar)
 		if (err)
 			return err;
 
+		if (ps)
+			wiphy_err(ar->hw->wiphy, "AWAKE -> NETWORK SLEEP\n");
+		else
+			wiphy_err(ar->hw->wiphy, "NETWORK SLEEP -> AWAKE\n");
+
 		if (ar->ps.state && !ps) {
 			ar->ps.sleep_ms = jiffies_to_msecs(jiffies -
 				ar->ps.last_action);

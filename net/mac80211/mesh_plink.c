@@ -406,7 +406,7 @@ void mesh_neighbour_update(struct ieee80211_sub_if_data *sdata,
 	    sdata->u.mesh.accepting_plinks &&
 	    sdata->u.mesh.mshcfg.auto_open_plinks &&
 	    rssi_threshold_check(sta, sdata))
-		mesh_plink_open(sta);
+		mesh_plink_open(sta);	/* is never called on userspace auth */
 
 	ieee80211_mps_frame_release(sta, elems);
 	ieee80211_mps_schedule_update(sta, mgmt, elems->tim);
@@ -420,6 +420,15 @@ static void mesh_plink_timer(unsigned long data)
 	__le16 llid, plid, reason;
 	struct ieee80211_sub_if_data *sdata;
 	struct mesh_config *mshcfg;
+	static const char *mplstates[] = {
+		[NL80211_PLINK_LISTEN] = "LISTEN",
+		[NL80211_PLINK_OPN_SNT] = "OPN-SNT",
+		[NL80211_PLINK_OPN_RCVD] = "OPN-RCVD",
+		[NL80211_PLINK_CNF_RCVD] = "CNF_RCVD",
+		[NL80211_PLINK_ESTAB] = "ESTAB",
+		[NL80211_PLINK_HOLDING] = "HOLDING",
+		[NL80211_PLINK_BLOCKED] = "BLOCKED"
+	};
 
 	/*
 	 * This STA is valid because sta_info_destroy() will
@@ -440,8 +449,8 @@ static void mesh_plink_timer(unsigned long data)
 		return;
 	}
 	mpl_dbg(sta->sdata,
-		"Mesh plink timer for %pM fired on state %d\n",
-		sta->sta.addr, sta->plink_state);
+		"Mesh plink timer for %pM fired on state %s\n",
+		sta->sta.addr, mplstates[sta->plink_state]);
 	reason = 0;
 	llid = sta->llid;
 	plid = sta->plid;

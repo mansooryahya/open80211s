@@ -620,6 +620,10 @@ void sta_info_recalc_tim(struct sta_info *sta)
 	else
 		__bss_tim_clear(ps->tim, id);
 
+	/*mps_dbg(sta->sdata, "TIM bit for %pM (%d)\n",
+		indicate_tim ? "setting" : "clearing",
+		sta->sta.addr, id);*/
+
 	if (local->ops->set_tim) {
 		local->tim_in_locked_section = true;
 		drv_set_tim(local, &sta->sta, indicate_tim);
@@ -1274,6 +1278,7 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 
 		sta_info_recalc_tim(sta);
 	} else {
+		mps_dbg(sdata, "driver_release_tids\n");
 		/*
 		 * We need to release a frame that is buffered somewhere in the
 		 * driver ... it'll have to handle that.

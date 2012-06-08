@@ -183,6 +183,11 @@ void ieee80211_mps_set_sta_local_pm(struct sta_info *sta,
 				    u32 delay)
 {
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
+	static const char *modes[] = {
+			[NL80211_MESH_POWER_ACTIVE] = "active",
+			[NL80211_MESH_POWER_LIGHT_SLEEP] = "light sleep",
+			[NL80211_MESH_POWER_DEEP_SLEEP] = "deep sleep",
+	};
 
 	if (delay) {
 		/* after peering/authentication/scanning it is useful to delay
@@ -195,8 +200,8 @@ void ieee80211_mps_set_sta_local_pm(struct sta_info *sta,
 		return;
 	}
 
-	mps_dbg(sdata, "local STA operates in mode %d with %pM\n",
-		pm, sta->sta.addr);
+	mps_dbg(sdata, "local STA operates in %s mode with %pM\n",
+		modes[pm], sta->sta.addr);
 
 	sta->local_pm = pm;
 
@@ -247,6 +252,8 @@ void ieee80211_mps_set_frame_flags(struct ieee80211_sub_if_data *sdata,
 		    ieee80211_is_data_qos(hdr->frame_control) &&
 		    !sta))
 		return;
+
+	WARN_ON(is_zero_ether_addr(hdr->addr1)); /* consider using is_valid_ether_addr */
 
 	if (is_unicast_ether_addr(hdr->addr1) &&
 	    ieee80211_is_data_qos(hdr->frame_control) &&
@@ -317,6 +324,8 @@ void ieee80211_mps_sta_status_update(struct sta_info *sta)
 	} else if (!do_buffer) {
 		test_and_clear_mpsp_flag(sta, WLAN_STA_MPSP_OWNER);
 	}
+
+	mps_dbg(sta->sdata, "num_sta_ps is %d\n", atomic_read(&sta->sdata->u.mesh.ps.num_sta_ps));
 }
 
 static void mps_set_sta_peer_pm(struct sta_info *sta,
@@ -324,6 +333,11 @@ static void mps_set_sta_peer_pm(struct sta_info *sta,
 {
 	enum nl80211_mesh_power_mode pm;
 	__le16 *qc = (__le16 *) ieee80211_get_qos_ctl(hdr);
+	static const char *modes[] = {
+		[NL80211_MESH_POWER_ACTIVE] = "active",
+		[NL80211_MESH_POWER_LIGHT_SLEEP] = "light sleep",
+		[NL80211_MESH_POWER_DEEP_SLEEP] = "deep sleep",
+	};
 
 	/* Test Power Managment field of frame control (PW) and
 	 * mesh power save level subfield of QoS control field (PSL)
@@ -346,8 +360,8 @@ static void mps_set_sta_peer_pm(struct sta_info *sta,
 	if (sta->peer_pm == pm)
 		return;
 
-	mps_dbg(sta->sdata, "STA %pM enters mode %d\n",
-		sta->sta.addr, pm);
+	mps_dbg(sta->sdata, "STA %pM enters %s mode\n",
+		sta->sta.addr, modes[pm]);
 
 	sta->peer_pm = pm;
 
@@ -358,6 +372,10 @@ static void mps_set_sta_nonpeer_pm(struct sta_info *sta,
 				   struct ieee80211_hdr *hdr)
 {
 	enum nl80211_mesh_power_mode pm;
+	static const char *modes[] = {
+		[NL80211_MESH_POWER_ACTIVE] = "active",
+		[NL80211_MESH_POWER_DEEP_SLEEP] = "deep sleep",
+	};
 
 	if (ieee80211_has_pm(hdr->frame_control))
 		pm = NL80211_MESH_POWER_DEEP_SLEEP;
@@ -367,8 +385,8 @@ static void mps_set_sta_nonpeer_pm(struct sta_info *sta,
 	if (sta->nonpeer_pm == pm)
 		return;
 
-	mps_dbg(sta->sdata, "STA %pM sets non-peer mode to %d\n",
-		sta->sta.addr, pm);
+	mps_dbg(sta->sdata, "STA %pM sets non-peer mode to %s\n",
+		sta->sta.addr, modes[pm]);
 
 	sta->nonpeer_pm = pm;
 
@@ -587,6 +605,12 @@ void ieee80211_mpsp_trigger_process(struct ieee80211_hdr *hdr,
 	__le16 *qc = (__le16 *) ieee80211_get_qos_ctl(hdr);
 	__le16 rspi = *qc & cpu_to_le16(IEEE80211_QOS_CTL_RSPI);
 	__le16 eosp = *qc & cpu_to_le16(IEEE80211_QOS_CTL_EOSP);
+
+	if (rspi || eosp ||
+	    (!tx && sta->local_pm != NL80211_MESH_POWER_ACTIVE && !test_sta_flag(sta, WLAN_STA_MPSP_RECIPIENT)) ||
+	    ( tx && acked && test_sta_flag(sta, WLAN_STA_PS_STA)    && !test_sta_flag(sta, WLAN_STA_MPSP_OWNER)))
+		mps_dbg(sta->sdata, "%s MPSP trigger%s%s %pM\n", tx ? "tx" : "rx",
+			rspi ? " RSPI" : "", eosp ? " EOSP" : "", sta->sta.addr);
 
 	if (tx) {
 		if (rspi && acked)
@@ -947,6 +971,8 @@ int ieee80211_mps_hw_init(struct ieee80211_hw *hw,
 	local->mps_ops = ops;
 	if (!ops)
 		local->mps_enabled = false;
+
+	printk(KERN_DEBUG "%sregistering mesh_ps_ops\n", ops ? "" : "de");
 
 	return 0;
 }

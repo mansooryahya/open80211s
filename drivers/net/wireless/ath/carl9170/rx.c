@@ -86,6 +86,8 @@ static void carl9170_handle_ps(struct ar9170 *ar, struct carl9170_rsp *rsp)
 		if (!new_ps) {
 			ar->ps.sleep_ms = jiffies_to_msecs(jiffies -
 				ar->ps.last_action);
+
+			wiphy_err(ar->hw->wiphy, "NETWORK SLEEP -> AWAKE (SWBA)\n");
 		}
 
 		ar->ps.last_action = jiffies;

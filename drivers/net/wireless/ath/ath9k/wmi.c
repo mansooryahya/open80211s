@@ -173,7 +173,11 @@ void ath9k_wmi_event_tasklet(unsigned long data)
 
 			ath9k_htc_txstatus(priv, wmi_event);
 			break;
+		case WMI_BMISS_EVENTID:
+			ath_dbg(ath9k_hw_common(priv->ah), PS, "BMISS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+			break;
 		default:
+			ath_dbg(ath9k_hw_common(priv->ah), PS, "unknown WMI %d\n", cmd_id);
 			break;
 		}
 

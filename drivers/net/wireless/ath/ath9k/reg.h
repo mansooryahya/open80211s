@@ -94,6 +94,15 @@
 #define AR_FTRIG_512B        0x00000080
 #define AR_TXCFG_ADHOC_BEACON_ATIM_TX_POLICY 0x00000800
 
+/*
+ * other possible values?
+ * 0x00000400 = BIT(10)
+ * 0x00000800 = BIT(11)
+ * 0x00001000 = BIT(12)
+ * 0x00002000 = BIT(13)
+ * 0x00004000 = BIT(14)
+ */
+
 #define AR_RXCFG             0x0034
 #define AR_RXCFG_CHIRP       0x00000008
 #define AR_RXCFG_ZLFDMA      0x00000010

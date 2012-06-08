@@ -1019,6 +1019,8 @@ void ieee80211_recalc_ps(struct ieee80211_local *local, s32 latency)
 	int count = 0;
 	int timeout;
 
+	printk(KERN_DEBUG "called ieee80211_recalc_ps\n");
+
 	if (!(local->hw.flags & IEEE80211_HW_SUPPORTS_PS)) {
 		local->ps_sdata = NULL;
 		return;

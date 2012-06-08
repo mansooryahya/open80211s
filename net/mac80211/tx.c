@@ -406,8 +406,11 @@ ieee80211_tx_h_multicast_ps_buf(struct ieee80211_tx_data *tx)
 		info->hw_queue = tx->sdata->vif.cab_queue;
 
 	/* device releases frame after DTIM beacon */
-	if (!(tx->local->hw.flags & IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING))
+	if (!(tx->local->hw.flags & IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING)) {
+		mps_dbg(tx->sdata, "buffering multicast frame in hardware\n");
 		return TX_CONTINUE;
+	}
+	mps_dbg(tx->sdata, "buffering multicast frame in mac80211\n");
 
 	/* buffered in mac80211 */
 	if (tx->local->total_ps_buffered >= TOTAL_MAX_TX_BUFFER)
@@ -2270,6 +2273,7 @@ void ieee80211_tx_pending(unsigned long data)
 }
 
 /* functions for drivers to get certain frames */
+/* be careful when placing printk in these functions! this miraculously changes the behaviour sometimes */
 
 static void __ieee80211_beacon_add_tim(struct ieee80211_sub_if_data *sdata,
 				       struct ps_data *ps,
@@ -2756,6 +2760,9 @@ ieee80211_get_buffered_bc(struct ieee80211_hw *hw,
 
 	if (ps->dtim_count != 0 || !ps->dtim_bc_mc)
 		goto out; /* send buffered bc/mc only after DTIM beacon */
+
+	mps_dbg(sdata, "DTIM: draining ps_bc_buf, buf_len=%d\n",
+		skb_queue_len(&ps->bc_buf));
 
 	while (1) {
 		skb = skb_dequeue(&ps->bc_buf);

@@ -655,6 +655,12 @@ void ieee80211_start_mesh(struct ieee80211_sub_if_data *sdata)
 					  ieee80211_get_sdata_band(sdata));
 	ieee80211_mps_local_status_update(sdata);
 
+	WARN_ON(atomic_read(&ifmsh->ps.num_sta_ps));
+	WARN_ON(atomic_read(&sdata->u.mesh.num_mpsp));
+	mps_dbg(sdata, "starting mesh with beacon interval %d, "
+		"dtim_period %d\n", sdata->vif.bss_conf.beacon_int,
+		sdata->vif.bss_conf.dtim_period);
+
 	ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_BEACON |
 						BSS_CHANGED_BEACON_ENABLED |
 						BSS_CHANGED_HT |
@@ -850,6 +856,17 @@ void ieee80211_mesh_notify_scan_completed(struct ieee80211_local *local)
 void ieee80211_mesh_init_sdata(struct ieee80211_sub_if_data *sdata)
 {
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+
+#ifdef CONFIG_MAC80211_MESH_PS_DEBUG
+	struct ieee80211_local *local = sdata->local;
+	printk(KERN_DEBUG "Hardware capabilities:\n");
+	printk(KERN_DEBUG "IEEE80211_HW_SUPPORTS_PS\t\t\t %s\n", (local->hw.flags & IEEE80211_HW_SUPPORTS_PS) ? "true" : "false");
+	printk(KERN_DEBUG "IEEE80211_HW_SUPPORTS_DYNAMIC_PS\t\t %s\n", (local->hw.flags & IEEE80211_HW_SUPPORTS_DYNAMIC_PS) ? "true" : "false");
+	printk(KERN_DEBUG "IEEE80211_HW_SUPPORTS_UAPSD\t\t %s\n", (local->hw.flags & IEEE80211_HW_SUPPORTS_UAPSD) ? "true" : "false");
+	printk(KERN_DEBUG "IEEE80211_HW_PS_NULLFUNC_STACK\t\t %s\n", (local->hw.flags & IEEE80211_HW_PS_NULLFUNC_STACK) ? "true" : "false");
+	printk(KERN_DEBUG "IEEE80211_CONF_PS\t\t\t %s\n", (local->hw.conf.flags & IEEE80211_CONF_PS) ? "true" : "false");
+	printk(KERN_DEBUG "IEEE80211_HW_AP_LINK_PS\t\t\t %s\n", (local->hw.flags & IEEE80211_HW_AP_LINK_PS) ? "true" : "false");
+#endif
 
 	setup_timer(&ifmsh->housekeeping_timer,
 		    ieee80211_mesh_housekeeping_timer,

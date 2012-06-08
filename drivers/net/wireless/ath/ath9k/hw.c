@@ -2091,13 +2091,13 @@ static void ath9k_set_power_network_sleep(struct ath_hw *ah)
 {
 	struct ath9k_hw_capabilities *pCap = &ah->caps;
 
-	REG_SET_BIT(ah, AR_STA_ID1, AR_STA_ID1_PWR_SAV);
+	REG_SET_BIT(ah, AR_STA_ID1, AR_STA_ID1_PWR_SAV); /* that register also contains info that we are in ad-hoc mode */
 
-	if (!(pCap->hw_caps & ATH9K_HW_CAP_AUTOSLEEP)) {
+	if (!(pCap->hw_caps & ATH9K_HW_CAP_AUTOSLEEP)) { /* ar7010 goes here */
 		/* Set WakeOnInterrupt bit; clear ForceWake bit */
 		REG_WRITE(ah, AR_RTC_FORCE_WAKE,
 			  AR_RTC_FORCE_WAKE_ON_INT);
-	} else {
+	} else { /* ar9271 goes here */
 
 		/* When chip goes into network sleep, it could be waken
 		 * up by MCI_INT interrupt caused by BT's HW messages
@@ -2108,7 +2108,7 @@ static void ath9k_set_power_network_sleep(struct ath_hw *ah)
 		 * SYS_WAKING and SYS_SLEEPING messages which will make
 		 * BT CPU to busy to process.
 		 */
-		if (ath9k_hw_mci_is_enabled(ah))
+		if (ath9k_hw_mci_is_enabled(ah)) /* false for ar9271 */
 			REG_CLR_BIT(ah, AR_MCI_INTERRUPT_RX_MSG_EN,
 				    AR_MCI_INTERRUPT_RX_HW_MSG_MASK);
 		/*
@@ -2120,6 +2120,16 @@ static void ath9k_set_power_network_sleep(struct ath_hw *ah)
 		if (ath9k_hw_mci_is_enabled(ah))
 			udelay(30);
 	}
+
+	/* AR_PCU_FORCE_BSSID_MATCH unsuccessful */
+	/* AR_RTC_INTR_CAUSE rarely shows anything (unrelated) */
+	/* AR_RTC_INTR_MASK always shows 0 */
+	/* AR_RTC_FORCE_WAKE is sometimes set to 3, but soon reset to 2 */
+	/* AR_RTC_KEEP_AWAKE always shows 2 before clearing AR_RTC_FORCE_WAKE, and will show DEADBEEF afterwards, if RTC is in sleep */
+	/* NFcal has no effect : ath9k_hw_bstuck_nfcal */
+	/* ANI has no effect */
+	if ((REG_READ(ah, AR_RTC_STATUS) & AR_RTC_STATUS_M) == AR_RTC_STATUS_ON)
+		ath_dbg(ath9k_hw_common(ah), PS, "AR_RTC_STATUS stuck!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 
 	/* Clear Bit 14 of AR_WA after putting chip into Net Sleep mode. */
 	if (AR_SREV_9300_20_OR_LATER(ah))
