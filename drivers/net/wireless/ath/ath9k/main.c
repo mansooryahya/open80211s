@@ -132,7 +132,8 @@ void ath9k_ps_restore(struct ath_softc *sc)
 				     PS_WAIT_FOR_CAB |
 				     PS_WAIT_FOR_PSPOLL_DATA |
 				     PS_WAIT_FOR_TX_ACK |
-				     PS_WAIT_FOR_ANI))) {
+				     PS_WAIT_FOR_ANI)) &&
+		   ieee80211_mps_hw_doze_allow(sc->hw)) {
 		mode = ATH9K_PM_NETWORK_SLEEP;
 		if (ath9k_hw_btcoex_is_enabled(sc->sc_ah))
 			ath9k_btcoex_stop_gen_timer(sc);
@@ -831,6 +832,24 @@ static void ath9k_stop(struct ieee80211_hw *hw)
 	ath_dbg(common, CONFIG, "Driver halt\n");
 }
 
+static void ath9k_mesh_doze(struct ieee80211_hw *hw)
+{
+	struct ath_softc *sc = hw->priv;
+	unsigned long flags;
+
+	ath9k_ps_wakeup(sc);
+	spin_lock_irqsave(&sc->sc_pm_lock, flags);
+	/* in mesh mode mac80211 checks beacons and CAB */
+	sc->ps_flags &= ~(PS_WAIT_FOR_BEACON | PS_WAIT_FOR_CAB);
+	spin_unlock_irqrestore(&sc->sc_pm_lock, flags);
+	ath9k_ps_restore(sc);
+}
+
+static const struct ieee80211_mps_ops ath9k_mesh_ps_ops = {
+	.hw_doze = ath9k_mesh_doze,
+	.hw_wakeup = ath9k_mesh_doze, /* intentionally same function */
+};
+
 bool ath9k_uses_beacons(int type)
 {
 	switch (type) {
@@ -941,6 +960,11 @@ static void ath9k_calculate_summary_state(struct ieee80211_hw *hw,
 			ah->opmode = NL80211_IFTYPE_ADHOC;
 		else
 			ah->opmode = NL80211_IFTYPE_STATION;
+
+		if (ah->opmode == NL80211_IFTYPE_MESH_POINT)
+			ieee80211_mps_hw_init(hw, &ath9k_mesh_ps_ops);
+		else if (old_opmode == NL80211_IFTYPE_MESH_POINT)
+			ieee80211_mps_hw_init(hw, NULL);
 	}
 
 	ath9k_hw_setopmode(ah);
@@ -1044,7 +1068,9 @@ static void ath9k_enable_ps(struct ath_softc *sc)
 	struct ath_common *common = ath9k_hw_common(ah);
 
 	sc->ps_enabled = true;
-	if (!(ah->caps.hw_caps & ATH9K_HW_CAP_AUTOSLEEP)) {
+	if (!(ah->caps.hw_caps & ATH9K_HW_CAP_AUTOSLEEP) &&
+	    sc->sc_ah->opmode != NL80211_IFTYPE_MESH_POINT) {
+		/* in mesh mode we trigger wakeups from mac80211 */
 		if ((ah->imask & ATH9K_INT_TIM_TIMER) == 0) {
 			ah->imask |= ATH9K_INT_TIM_TIMER;
 			ath9k_hw_set_interrupts(ah);
@@ -1105,7 +1131,7 @@ static int ath9k_config(struct ieee80211_hw *hw, u32 changed)
 	 * We just prepare to enable PS. We have to wait until our AP has
 	 * ACK'd our null data frame to disable RX otherwise we'll ignore
 	 * those ACKs and end up retransmitting the same null data frames.
-	 * IEEE80211_CONF_CHANGE_PS is only passed by mac80211 for STA mode.
+	 * IEEE80211_CONF_CHANGE_PS is passed by mac80211 for STA or mesh mode.
 	 */
 	if (changed & IEEE80211_CONF_CHANGE_PS) {
 		unsigned long flags;
