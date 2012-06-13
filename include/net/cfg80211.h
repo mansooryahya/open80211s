@@ -1012,6 +1012,8 @@ struct bss_parameters {
  *	setting for new peer links.
  * @dot11MeshAwakeWindowDuration: The duration in TUs the STA will remain awake
  *	after transmitting its beacon.
+ * @peer_inactivity_limit: Timeout (in seconds) for peer STA that have not
+ *	sent any beacons or other frames to the local STA.
  */
 struct mesh_config {
 	u16 dot11MeshRetryTimeout;
@@ -1041,6 +1043,7 @@ struct mesh_config {
 	u16 dot11MeshHWMPconfirmationInterval;
 	enum nl80211_mesh_power_mode power_mode;
 	u16 dot11MeshAwakeWindowDuration;
+	u16 peer_inactivity_limit;
 };
 
 /**

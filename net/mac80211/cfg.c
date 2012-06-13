@@ -1762,6 +1762,8 @@ static int ieee80211_update_mesh_config(struct wiphy *wiphy,
 			nconf->dot11MeshAwakeWindowDuration;
 		ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_BEACON);
 	}
+	if (_chg_mesh_attr(NL80211_MESHCONF_PEER_INACTIVITY_LIMIT, mask))
+		conf->peer_inactivity_limit = nconf->peer_inactivity_limit;
 	return 0;
 }
 

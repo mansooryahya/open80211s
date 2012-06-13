@@ -2387,6 +2387,9 @@ enum nl80211_mesh_power_mode {
  *
  * @NL80211_MESHCONF_AWAKE_WINDOW: awake window duration (in TUs)
  *
+ * @NL80211_MESHCONF_PEER_INACTIVITY_LIMIT: Timeout (in seconds) for peer STA
+ *	that have not sent any beacons or other frames to the local STA.
+ *
  * @__NL80211_MESHCONF_ATTR_AFTER_LAST: internal use
  */
 enum nl80211_meshconf_params {
@@ -2418,6 +2421,7 @@ enum nl80211_meshconf_params {
 	NL80211_MESHCONF_HWMP_CONFIRMATION_INTERVAL,
 	NL80211_MESHCONF_POWER_MODE,
 	NL80211_MESHCONF_AWAKE_WINDOW,
+	NL80211_MESHCONF_PEER_INACTIVITY_LIMIT,
 
 	/* keep last */
 	__NL80211_MESHCONF_ATTR_AFTER_LAST,

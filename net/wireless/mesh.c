@@ -39,6 +39,7 @@
 
 /* Default maximum number of established plinks per interface */
 #define MESH_MAX_ESTAB_PLINKS	32
+#define MESH_PEER_INACTIVITY_LIMIT	1800	/* in seconds */
 
 #define MESH_MAX_PREQ_RETRIES	4
 
@@ -75,6 +76,7 @@ const struct mesh_config default_mesh_config = {
 	.dot11MeshHWMPconfirmationInterval = MESH_ROOT_CONFIRMATION_INTERVAL,
 	.power_mode = NL80211_MESH_POWER_ACTIVE,
 	.dot11MeshAwakeWindowDuration = MESH_DEFAULT_AWAKE_WINDOW,
+	.peer_inactivity_limit = MESH_PEER_INACTIVITY_LIMIT,
 };
 
 const struct mesh_setup default_mesh_setup = {
