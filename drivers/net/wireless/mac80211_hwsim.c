@@ -340,7 +340,11 @@ struct mac80211_hwsim_data {
 	struct timer_list beacon_timer;
 	enum ps_mode {
 		PS_DISABLED, PS_ENABLED, PS_AUTO_POLL, PS_MANUAL_POLL
-	} ps;
+	} ps; /* regard this as current radio state */
+	bool ps_enabled;
+	bool ps_wait_for_cab;
+	bool ps_wait_for_beacon;
+
 	bool ps_poll_pending;
 	struct dentry *debugfs;
 	struct dentry *debugfs_ps;
@@ -545,6 +549,24 @@ static bool hwsim_ps_rx_ok(struct mac80211_hwsim_data *data,
 	return true;
 }
 
+static void mac80211_hwsim_setpower(struct mac80211_hwsim_data *data, enum ps_mode mode)
+{
+	struct ieee80211_hw *hw = data->hw;
+	static const char *modes[] = {
+		"AWAKE",
+		"NETWORK SLEEP",
+		"",
+		"",
+	};
+
+	if (data->ps == mode)
+		return;
+
+	wiphy_debug(hw->wiphy, "%s -> %s\n",
+		    modes[data->ps], modes[mode]);
+
+	data->ps = mode;
+}
 
 struct mac80211_hwsim_addr_match_data {
 	bool ret;
@@ -576,6 +598,38 @@ static bool mac80211_hwsim_addr_match(struct mac80211_hwsim_data *data,
 						   &md);
 
 	return md.ret;
+}
+
+static bool mac80211_beacon_dtim_pending_cab(struct sk_buff *skb)
+{
+	/* Check whether the Beacon frame has DTIM indicating buffered bc/mc */
+	struct ieee80211_mgmt *mgmt;
+	u8 *pos, *end, id, elen;
+	struct ieee80211_tim_ie *tim;
+
+	mgmt = (struct ieee80211_mgmt *)skb->data;
+	pos = mgmt->u.beacon.variable;
+	end = skb->data + skb->len;
+
+	while (pos + 2 < end) {
+		id = *pos++;
+		elen = *pos++;
+		if (pos + elen > end)
+			break;
+
+		if (id == WLAN_EID_TIM) {
+			if (elen < sizeof(*tim))
+				break;
+			tim = (struct ieee80211_tim_ie *) pos;
+			if (tim->dtim_count != 0)
+				break;
+			return tim->bitmap_ctrl & 0x01;
+		}
+
+		pos += elen;
+	}
+
+	return false;
 }
 
 static void mac80211_hwsim_tx_frame_nl(struct ieee80211_hw *hw,
@@ -801,6 +855,37 @@ static bool mac80211_hwsim_tx_frame_no_nl(struct ieee80211_hw *hw,
 #endif
 
 		memcpy(IEEE80211_SKB_RXCB(nskb), &rx_status, sizeof(rx_status));
+
+		/* power save */
+		if (data2->ps_enabled) {
+			if (data2->ps_wait_for_cab &&
+			    (ieee80211_is_data(hdr->frame_control) ||
+			     ieee80211_is_action(hdr->frame_control)) &&
+			    is_multicast_ether_addr(hdr->addr1) &&
+			    !ieee80211_has_moredata(hdr->frame_control)) {
+				/*
+				 * No more broadcast/multicast frames to be received at this
+				 * point.
+				 */
+				data2->ps_wait_for_cab = false;
+				wiphy_debug(data2->hw->wiphy, "All PS CAB frames"
+					    " received, back to sleep\n");
+
+				if (!data2->ps_wait_for_beacon &&
+				    ieee80211_mps_hw_doze_allow(data2->hw))
+					mac80211_hwsim_setpower(data2, PS_ENABLED);
+			}
+
+			if (ieee80211_is_beacon(mgmt->frame_control)) {
+				data2->ps_wait_for_beacon = false; /* FIXME this is the first beacon we receive, but not necessarily the one/all we were expecting */
+
+				data2->ps_wait_for_cab = mac80211_beacon_dtim_pending_cab(nskb); /* FIXME consecutive hwsim beacons overwrite one another */
+				if (!data2->ps_wait_for_cab &&
+				    ieee80211_mps_hw_doze_allow(data2->hw))
+					mac80211_hwsim_setpower(data2, PS_ENABLED);
+			}
+		}
+
 		ieee80211_rx_irqsafe(data2->hw, nskb);
 	}
 	spin_unlock(&hwsim_radio_lock);
@@ -850,7 +935,7 @@ static void mac80211_hwsim_tx(struct ieee80211_hw *hw,
 
 	if (txi->control.vif)
 		hwsim_check_magic(txi->control.vif);
-	if (control->sta)
+	if (control && control->sta)
 		hwsim_check_sta_magic(control->sta);
 
 	txi->rate_driver_data[0] = channel;
@@ -900,6 +985,24 @@ static void mac80211_hwsim_stop(struct ieee80211_hw *hw)
 	wiphy_debug(hw->wiphy, "%s\n", __func__);
 }
 
+static void mac80211_hwsim_mesh_sleep(struct ieee80211_hw *hw)
+{
+	struct mac80211_hwsim_data *data = hw->priv;
+
+	mac80211_hwsim_setpower(data, PS_ENABLED);
+}
+
+static void mac80211_hwsim_mesh_wakeup(struct ieee80211_hw *hw)
+{
+	struct mac80211_hwsim_data *data = hw->priv;
+
+	mac80211_hwsim_setpower(data, PS_DISABLED);
+}
+
+static const struct ieee80211_mps_ops mac802211_hwsim_mesh_ps_ops = {
+	.hw_doze = mac80211_hwsim_mesh_sleep,
+	.hw_wakeup = mac80211_hwsim_mesh_wakeup,
+};
 
 static int mac80211_hwsim_add_interface(struct ieee80211_hw *hw,
 					struct ieee80211_vif *vif)
@@ -914,6 +1017,9 @@ static int mac80211_hwsim_add_interface(struct ieee80211_hw *hw,
 	vif->hw_queue[IEEE80211_AC_VI] = 1;
 	vif->hw_queue[IEEE80211_AC_BE] = 2;
 	vif->hw_queue[IEEE80211_AC_BK] = 3;
+
+	if (ieee80211_vif_is_mesh(vif))
+		ieee80211_mps_hw_init(hw, &mac802211_hwsim_mesh_ps_ops);
 
 	return 0;
 }
@@ -942,6 +1048,9 @@ static void mac80211_hwsim_remove_interface(
 		    vif->addr);
 	hwsim_check_magic(vif);
 	hwsim_clear_magic(vif);
+
+	if (ieee80211_vif_is_mesh(vif))
+		ieee80211_mps_hw_init(hw, NULL);
 }
 
 static void mac80211_hwsim_tx_frame(struct ieee80211_hw *hw,
@@ -959,11 +1068,32 @@ static void mac80211_hwsim_tx_frame(struct ieee80211_hw *hw,
 	dev_kfree_skb(skb);
 }
 
+static u8 *mac80211_hwsim_find_ie(u8 *data, unsigned int len, u8 ie)
+{
+	struct ieee80211_mgmt *mgmt = (void *)data;
+	u8 *pos, *end;
+
+	pos = (u8 *)mgmt->u.beacon.variable;
+	end = data + len;
+	while (pos < end) {
+		if (pos + 2 + pos[1] > end)
+			return NULL;
+
+		if (pos[0] == ie)
+			return pos;
+
+		pos += 2 + pos[1];
+	}
+	return NULL;
+}
+
 static void mac80211_hwsim_beacon_tx(void *arg, u8 *mac,
 				     struct ieee80211_vif *vif)
 {
 	struct ieee80211_hw *hw = arg;
 	struct sk_buff *skb;
+	struct ieee80211_tim_ie *tim;
+	bool release_bc;
 
 	hwsim_check_magic(vif);
 
@@ -972,12 +1102,25 @@ static void mac80211_hwsim_beacon_tx(void *arg, u8 *mac,
 	    vif->type != NL80211_IFTYPE_ADHOC)
 		return;
 
+	wiphy_debug(hw->wiphy, "sending beacon\n");
+	mac80211_hwsim_setpower(hw->priv, PS_DISABLED); /* ath9k style */
+
 	skb = ieee80211_beacon_get(hw, vif);
 	if (skb == NULL)
 		return;
 
+	/* transmit buffered broadcast frames after DTIM beacon */
+	tim = (struct ieee80211_tim_ie *) mac80211_hwsim_find_ie(
+			skb->data, skb->len, WLAN_EID_TIM);
+	if (tim->dtim_count == 0)
+		release_bc = true;
+
 	mac80211_hwsim_tx_frame(hw, skb,
 				rcu_dereference(vif->chanctx_conf)->def.chan);
+
+	if(release_bc)
+		while ((skb = ieee80211_get_buffered_bc(hw, vif)))
+			mac80211_hwsim_tx(hw, NULL, skb);
 }
 
 
@@ -1022,6 +1165,15 @@ static int mac80211_hwsim_config(struct ieee80211_hw *hw, u32 changed)
 		    !!(conf->flags & IEEE80211_CONF_IDLE),
 		    !!(conf->flags & IEEE80211_CONF_PS),
 		    smps_modes[conf->smps_mode]);
+
+	if (changed & IEEE80211_CONF_CHANGE_PS) {
+		if (conf->flags & IEEE80211_CONF_PS) {
+			data->ps_enabled = true;
+		} else {
+			data->ps_enabled = false;
+			mac80211_hwsim_setpower(data, PS_DISABLED);
+		}
+	}
 
 	data->idle = !!(conf->flags & IEEE80211_CONF_IDLE);
 
@@ -2156,7 +2308,9 @@ static int __init init_mac80211_hwsim(void)
 			    IEEE80211_HW_SUPPORTS_DYNAMIC_SMPS |
 			    IEEE80211_HW_AMPDU_AGGREGATION |
 			    IEEE80211_HW_WANT_MONITOR_VIF |
-			    IEEE80211_HW_QUEUE_CONTROL;
+			    IEEE80211_HW_QUEUE_CONTROL |
+			    IEEE80211_HW_HOST_BROADCAST_PS_BUFFERING |
+			    IEEE80211_HW_SUPPORTS_PS;
 
 		hw->wiphy->flags |= WIPHY_FLAG_SUPPORTS_TDLS |
 				    WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
