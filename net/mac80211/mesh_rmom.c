@@ -12,6 +12,9 @@
 #include "mesh.h"
 #include "mesh_rmom.h"
 
+static u32 last_msn = 0;
+static u32 last_sn = 0;
+
 /**
  * is_rmom_range_addr - Check if addr is RMoM range addr
  *
@@ -44,12 +47,31 @@ bool is_rmom_range_addr(const u8 *addr)
 void mesh_rmom_set_seqnum(struct ieee80211_sub_if_data *sdata,
 			  struct ieee80211s_hdr *mesh_hdr, u8 *da)
 {
-	if (is_multicast_ether_addr(da))
+	if (is_multicast_ether_addr(da)) {
+
+		if (sdata->u.mesh.mesh_mseqnum - last_msn > 0)
+			printk(KERN_WARNING "(WARNING non expected sn (multicast)\n");
+
 		put_unaligned_le32(sdata->u.mesh.mesh_mseqnum++,
 				   &mesh_hdr->seqnum);
-	else
+
+		if (sdata->u.mesh.mesh_mseqnum - last_msn > 1)
+                        printk(KERN_WARNING "Something wrong happened after updating mcast_sn\n");
+
+
+		last_msn = sdata->u.mesh.mesh_mseqnum;
+	}
+	else {
+		if (sdata->u.mesh.mesh_seqnum - last_sn > 0)
+			printk(KERN_WARNING "WARNING non expected sn (unicast)\n");
+
 		put_unaligned_le32(sdata->u.mesh.mesh_seqnum++,
 				   &mesh_hdr->seqnum);
+
+
+
+		last_sn = sdata->u.mesh.mesh_seqnum;
+	}
 }
 
 /**
