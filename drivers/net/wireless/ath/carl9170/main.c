@@ -552,6 +552,26 @@ static void carl9170_ping_work(struct work_struct *work)
 	mutex_unlock(&ar->mutex);
 }
 
+static void carl9170_mesh_doze(struct ieee80211_hw *hw)
+{
+	struct ar9170 *ar = hw->priv;
+
+	ar->ps.off_override &= ~PS_OFF_BCN;
+	carl9170_ps_check(ar);
+}
+
+static void carl9170_mesh_wakeup(struct ieee80211_hw *hw)
+{
+	struct ar9170 *ar = hw->priv;
+
+	carl9170_ps_check(ar);
+}
+
+static const struct ieee80211_mps_ops carl9170_mps_ops = {
+	.hw_doze = carl9170_mesh_doze,
+	.hw_wakeup = carl9170_mesh_wakeup,
+};
+
 static int carl9170_init_interface(struct ar9170 *ar,
 				   struct ieee80211_vif *vif)
 {
@@ -674,6 +694,9 @@ init:
 			goto unlock;
 	}
 
+	if (ieee80211_vif_is_mesh(vif))
+		ieee80211_mps_hw_init(hw, &carl9170_mps_ops);
+
 unlock:
 	if (err && (vif_id >= 0)) {
 		vif_priv->active = false;
@@ -727,6 +750,7 @@ static void carl9170_op_remove_interface(struct ieee80211_hw *hw,
 					carl9170_get_main_vif(ar)));
 		} else {
 			carl9170_set_operating_mode(ar);
+			ieee80211_mps_hw_init(hw, NULL);
 		}
 	} else {
 		rcu_read_unlock();
@@ -768,6 +792,9 @@ static int carl9170_ps_update(struct ar9170 *ar)
 
 	if (!ar->ps.off_override)
 		ps = (ar->hw->conf.flags & IEEE80211_CONF_PS);
+
+	if (ps)
+		ps = ieee80211_mps_hw_doze_allow(ar->hw);
 
 	if (ps != ar->ps.state) {
 		err = carl9170_powersave(ar, ps);

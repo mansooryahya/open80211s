@@ -203,7 +203,19 @@ void carl9170_handle_command_response(struct ar9170 *ar, void *buf, u32 len)
 
 		case NL80211_IFTYPE_AP:
 		case NL80211_IFTYPE_ADHOC:
+			carl9170_update_beacon(ar, true);
+			break;
+
 		case NL80211_IFTYPE_MESH_POINT:
+			/*
+			 * beaconing & PS currently only in mesh mode.
+			 * the firmware uses the same interrupt (PRETBTT)
+			 * for beaconing and waking up for the AP beacon in
+			 * managed mode. As a consequence the hardware always
+			 * wakes up before sending the beacon. This is the
+			 * intended behavior for mesh Awake Windows.
+			 */
+			carl9170_handle_ps(ar, cmd);
 			carl9170_update_beacon(ar, true);
 			break;
 
