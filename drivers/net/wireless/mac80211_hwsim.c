@@ -993,8 +993,7 @@ static void mac80211_hwsim_beacon(unsigned long arg)
 		hw, IEEE80211_IFACE_ITER_NORMAL,
 		mac80211_hwsim_beacon_tx, hw);
 
-	data->beacon_timer.expires = jiffies + data->beacon_int;
-	add_timer(&data->beacon_timer);
+	mod_timer(&data->beacon_timer, jiffies + data->beacon_int);
 }
 
 static const char *hwsim_chantypes[] = {
