@@ -1184,7 +1184,7 @@ static int mac80211_hwsim_config(struct ieee80211_hw *hw, u32 changed)
 	data->power_level = conf->power_level;
 	if (!data->started || !data->beacon_int)
 		del_timer(&data->beacon_timer);
-	else
+	else if (!timer_pending(&data->beacon_timer))
 		mod_timer(&data->beacon_timer, jiffies + data->beacon_int);
 
 	return 0;
