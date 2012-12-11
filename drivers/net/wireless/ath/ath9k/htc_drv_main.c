@@ -1089,7 +1089,7 @@ static int ath9k_htc_add_interface(struct ieee80211_hw *hw,
 		hvif.opmode = HTC_M_HOSTAP;
 		break;
 	case NL80211_IFTYPE_MESH_POINT:
-		hvif.opmode = HTC_M_WDS;	/* close enough */
+		hvif.opmode = HTC_M_IBSS;	/* close enough */
 		break;
 	default:
 		ath_err(common,
