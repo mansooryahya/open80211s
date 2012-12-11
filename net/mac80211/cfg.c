@@ -1249,6 +1249,11 @@ static int sta_apply_parameters(struct ieee80211_local *local,
 				break;
 			}
 			ieee80211_bss_info_change_notify(sdata, changed);
+
+			/* set non-peer PM to active during authentication */
+			if (mask & BIT(NL80211_STA_FLAG_AUTHENTICATED) &&
+			    !(set & BIT(NL80211_STA_FLAG_AUTHENTICATED)))
+				ieee80211_mps_local_status_update(sdata);
 		} else {
 			switch (params->plink_action) {
 			case PLINK_ACTION_OPEN:

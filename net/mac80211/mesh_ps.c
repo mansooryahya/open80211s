@@ -108,7 +108,7 @@ void ieee80211_mps_local_status_update(struct ieee80211_sub_if_data *sdata)
 {
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 	struct sta_info *sta;
-	bool peering = false;
+	bool peering = false, authenticating = false;
 	int light_sleep_cnt = 0;
 	int deep_sleep_cnt = 0;
 
@@ -132,6 +132,10 @@ void ieee80211_mps_local_status_update(struct ieee80211_sub_if_data *sdata)
 		default:
 			break;
 		}
+
+		if (!test_sta_flag(sta, WLAN_STA_AUTH) ||
+		    !test_sta_flag(sta, WLAN_STA_AUTHORIZED))
+			authenticating = true;
 	}
 	rcu_read_unlock();
 
@@ -141,14 +145,14 @@ void ieee80211_mps_local_status_update(struct ieee80211_sub_if_data *sdata)
 	 * light or deep sleep towards at least one mesh peer (see 13.14.3.1)
 	 * otherwise set it to the user-configured default value
 	 */
-	if (peering) {
-		mps_dbg(sdata, "setting non-peer PM to active for peering\n");
+	if (peering || authenticating) {
+		mps_dbg(sdata, "set non-peer PM to active during peer/auth\n");
 		ifmsh->nonpeer_pm = NL80211_MESH_POWER_ACTIVE;
 	} else if (light_sleep_cnt || deep_sleep_cnt) {
-		mps_dbg(sdata, "setting non-peer PM to deep sleep\n");
+		mps_dbg(sdata, "set non-peer PM to deep sleep\n");
 		ifmsh->nonpeer_pm = NL80211_MESH_POWER_DEEP_SLEEP;
 	} else {
-		mps_dbg(sdata, "setting non-peer PM to user value\n");
+		mps_dbg(sdata, "set non-peer PM to user value\n");
 		ifmsh->nonpeer_pm = ifmsh->mshcfg.power_mode;
 	}
 

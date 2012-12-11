@@ -461,7 +461,9 @@ ieee80211_tx_h_unicast_ps_buf(struct ieee80211_tx_data *tx)
 		if (ieee80211_is_mgmt(hdr->frame_control) &&
 		    !ieee80211_is_deauth(hdr->frame_control) &&
 		    !ieee80211_is_disassoc(hdr->frame_control) &&
-		    !ieee80211_is_action(hdr->frame_control)) {
+		    !ieee80211_is_action(hdr->frame_control) &&
+		    !(ieee80211_vif_is_mesh(&sta->sdata->vif) &&
+		      ieee80211_is_auth(hdr->frame_control))) {
 			info->flags |= IEEE80211_TX_CTL_NO_PS_BUFFER;
 			return TX_CONTINUE;
 		}
