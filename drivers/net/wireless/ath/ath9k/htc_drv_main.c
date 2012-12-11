@@ -55,6 +55,10 @@ bool ath9k_htc_setpower(struct ath9k_htc_priv *priv,
 {
 	bool ret;
 
+	if (mode == ATH9K_PM_NETWORK_SLEEP &&
+	    !ieee80211_mps_hw_doze_allow(priv->hw))
+		return true;
+
 	mutex_lock(&priv->htc_pm_lock);
 	ret = ath9k_hw_setpower(priv->ah, mode);
 	mutex_unlock(&priv->htc_pm_lock);
@@ -75,7 +79,10 @@ unlock:
 
 void ath9k_htc_ps_restore(struct ath9k_htc_priv *priv)
 {
-	bool reset;
+	bool reset, doze_allow = true;
+
+	if (!priv->ps_idle && priv->ps_enabled)
+		doze_allow = ieee80211_mps_hw_doze_allow(priv->hw);
 
 	mutex_lock(&priv->htc_pm_lock);
 	if (--priv->ps_usecount != 0)
@@ -85,7 +92,7 @@ void ath9k_htc_ps_restore(struct ath9k_htc_priv *priv)
 		ath9k_hw_setrxabort(priv->ah, true);
 		ath9k_hw_stopdmarecv(priv->ah, &reset);
 		ath9k_hw_setpower(priv->ah, ATH9K_PM_FULL_SLEEP);
-	} else if (priv->ps_enabled) {
+	} else if (priv->ps_enabled && doze_allow) {
 		ath9k_hw_setpower(priv->ah, ATH9K_PM_NETWORK_SLEEP);
 	}
 
@@ -174,8 +181,30 @@ static void ath9k_htc_set_bssid_mask(struct ath9k_htc_priv *priv,
 	ath_hw_setbssidmask(common);
 }
 
+
+static void ath9k_htc_mesh_doze(struct ieee80211_hw *hw)
+{
+	struct ath9k_htc_priv *priv = hw->priv;
+
+	ath9k_htc_setpower(priv, ATH9K_PM_NETWORK_SLEEP);
+}
+
+static void ath9k_htc_mesh_wakeup(struct ieee80211_hw *hw)
+{
+	struct ath9k_htc_priv *priv = hw->priv;
+
+	ath9k_htc_setpower(priv, ATH9K_PM_AWAKE);
+}
+
+static const struct ieee80211_mps_ops ath9k_htc_mesh_ps_ops = {
+	.hw_doze = ath9k_htc_mesh_doze,
+	.hw_wakeup = ath9k_htc_mesh_wakeup,
+};
+
 static void ath9k_htc_set_opmode(struct ath9k_htc_priv *priv)
 {
+	enum nl80211_iftype old_opmode = priv->ah->opmode;
+
 	if (priv->num_ibss_vif)
 		priv->ah->opmode = NL80211_IFTYPE_ADHOC;
 	else if (priv->num_ap_vif)
@@ -184,6 +213,11 @@ static void ath9k_htc_set_opmode(struct ath9k_htc_priv *priv)
 		priv->ah->opmode = NL80211_IFTYPE_MESH_POINT;
 	else
 		priv->ah->opmode = NL80211_IFTYPE_STATION;
+
+	if (priv->ah->opmode == NL80211_IFTYPE_MESH_POINT)
+		ieee80211_mps_hw_init(priv->hw, &ath9k_htc_mesh_ps_ops);
+	else if (old_opmode == NL80211_IFTYPE_MESH_POINT)
+		ieee80211_mps_hw_init(priv->hw, NULL);
 
 	ath9k_hw_setopmode(priv->ah);
 }
